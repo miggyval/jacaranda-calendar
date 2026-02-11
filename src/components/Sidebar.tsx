@@ -82,7 +82,6 @@ export function Sidebar({
             title="Upload CSV"
           >
             <Download className="h-4 w-4" />
-            CSV
           </button>
 
           <input

@@ -165,28 +165,45 @@ function DayColumn({
   previewId: string | null;
   onHoverChange: (id: string | null) => void;
 }) {
+  const end = 20 * 60;
+
+  const ticks: number[] = [];
+  for (let t = start + 30; t < end; t += 30) ticks.push(t);
+
   return (
     <div className="relative border-r border-white/10" style={{ height: heightPx }}>
+      {/* gridlines BEHIND events */}
       <div
-        className="absolute inset-0"
         style={{
-          backgroundImage: [
-            `repeating-linear-gradient(to bottom,
-              transparent 0,
-              transparent ${30 * PX_PER_MIN - 1}px,
-              rgba(255,255,255,0.03) ${30 * PX_PER_MIN - 1}px,
-              rgba(255,255,255,0.03) ${30 * PX_PER_MIN}px
-            )`,
-            `repeating-linear-gradient(to bottom,
-              transparent 0,
-              transparent ${60 * PX_PER_MIN - 1}px,
-              rgba(255,255,255,0.07) ${60 * PX_PER_MIN - 1}px,
-              rgba(255,255,255,0.07) ${60 * PX_PER_MIN}px
-            )`,
-          ].join(", "),
+          position: "absolute",
+          inset: 0,
+          zIndex: 0,
+          pointerEvents: "none",
         }}
-      />
+      >
+        {ticks.map((t) => {
+          const isHour = t % 60 === 0;
+          const top = GRID_PAD_TOP + (t - start) * PX_PER_MIN;
 
+          return (
+            <div
+              key={t}
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                top,
+                height: 1,
+                backgroundColor: isHour
+                  ? "rgba(255,255,255,0.4)"
+                  : "rgba(255,255,255,0.03)",
+              }}
+            />
+          );
+        })}
+      </div>
+
+      {/* events ON TOP */}
       {events.map((e) => (
         <EventCard
           key={e.id}
@@ -201,6 +218,8 @@ function DayColumn({
     </div>
   );
 }
+
+
 
 function EventCard({
   e,
