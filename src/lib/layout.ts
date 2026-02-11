@@ -7,7 +7,7 @@ export function daysInData(events: ClassEvent[]): Day[] {
   for (const e of events) set.add(e.day);
 
   const base: Day[] = ["MON", "TUE", "WED", "THU", "FRI"];
-  const weekend: Day[] = (["SAT", "SUN"].filter((d) => set.has(d)) as Day[]);
+  const weekend: Day[] = (["SAT", "SUN"] as const).filter((d) => set.has(d));
   return [...base, ...weekend];
 }
 

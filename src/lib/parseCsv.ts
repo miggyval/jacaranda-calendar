@@ -9,6 +9,7 @@ type RawRow = {
   StartTime?: string;
   EndTime?: string;
   Location?: string;
+  Enabled?: string;
   [k: string]: unknown; // tolerate weird header capitalisation
 };
 
@@ -50,6 +51,7 @@ export async function parseClassesCsv(file: File): Promise<ClassEvent[]> {
     const startRaw = getField(row, "StartTime").trim();
     const endRaw = getField(row, "EndTime").trim();
     const location = getField(row, "Location").trim();
+    const enabledRaw = getField(row, "Enabled").trim();
 
     if (!courseCode && !classCode && !dayRaw && !startRaw && !endRaw && !location) continue;
 
@@ -70,7 +72,11 @@ export async function parseClassesCsv(file: File): Promise<ClassEvent[]> {
     if (seen.has(id)) continue;
     seen.add(id);
 
-    out.push({ id, courseCode, classCode, day, startMin, endMin, location });
+    // If the Enabled column is missing/blank, assume disabled (0)
+    const enabled: 0 | 1 = enabledRaw === "" ? 0 : Number(enabledRaw) === 1 ? 1 : 0;
+    const allocatedHours = (endMin - startMin) / 60;
+    out.push({ id, courseCode, classCode, day, startMin, endMin, location, enabled, allocatedHours });
+
   }
 
   if (out.length === 0) {

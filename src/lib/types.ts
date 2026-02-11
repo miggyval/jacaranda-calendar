@@ -8,6 +8,9 @@ export interface ClassEvent {
   startMin: number; // minutes from 00:00
   endMin: number;
   location: string;
+  allocatedHours?: number;
+  // Optional, used for CSV import/export. App state still uses selected IDs as source of truth.
+  enabled?: 0 | 1;
 }
 
 export interface PositionedEvent extends ClassEvent {
