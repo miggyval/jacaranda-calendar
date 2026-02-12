@@ -1,6 +1,6 @@
 import { useMemo, useRef } from "react";
 import { toPng } from "html-to-image";
-import { X, Upload } from "lucide-react";
+import { X, Upload, Plus } from "lucide-react";
 import clsx from "clsx";
 import { daysInData, layoutEventsByDay } from "../lib/layout";
 import { formatMinutes } from "../lib/time";
@@ -14,12 +14,22 @@ type Props = {
   hoveredId: string | null;
   onHoverChange: (id: string | null) => void;
   onDeselect: (id: string) => void;
+
+  previewGroupKey: string | null;
+  onPreviewGroupKeyChange: (key: string | null) => void;
 };
 
 const PX_PER_MIN = 1.2; // 72px per hour
-const GRID_PAD_TOP = 10;    // px
+const GRID_PAD_TOP = 10; // px
 const GRID_PAD_BOTTOM = 10; // px
 
+function classTypeFromClassCode(classCode: string) {
+  return classCode.split("-")[0] ?? classCode;
+}
+
+function makeGroupKey(e: ClassEvent) {
+  return `${e.courseCode}::${classTypeFromClassCode(e.classCode)}`;
+}
 
 export function Timetable({
   events,
@@ -28,6 +38,8 @@ export function Timetable({
   hoveredId,
   onHoverChange,
   onDeselect,
+  previewGroupKey,
+  onPreviewGroupKeyChange,
 }: Props) {
   const visibleSelected = useMemo(() => {
     if (hidden.size === 0) return selected;
@@ -46,37 +58,54 @@ export function Timetable({
     [events, hoveredId]
   );
 
+  // hover-preview (sidebar hover over non-selected)
   const previewId =
     hoveredEvent && !visibleSelected.has(hoveredEvent.id) ? hoveredEvent.id : null;
 
+  // group preview events (courseCode + PRA1/APP1 etc)
+  // - respect hidden
+  // - don't add already-selected-visible ones (they get highlighted instead)
+  const previewGroupEvents = useMemo(() => {
+    if (!previewGroupKey) return [];
+    return events.filter((e) => {
+      if (hidden.has(e.id)) return false;
+      if (visibleSelected.has(e.id)) return false;
+      return makeGroupKey(e) === previewGroupKey;
+    });
+  }, [events, previewGroupKey, hidden, visibleSelected]);
+
   const eventsForLayout = useMemo(() => {
-    if (!hoveredEvent) return selectedEvents;
-    if (selectedEvents.some((e) => e.id === hoveredEvent.id)) return selectedEvents;
-    return [...selectedEvents, hoveredEvent];
-  }, [selectedEvents, hoveredEvent]);
+    const base = [...selectedEvents, ...previewGroupEvents];
+
+    if (!hoveredEvent) return base;
+
+    if (base.some((e) => e.id === hoveredEvent.id)) return base;
+    if (hidden.has(hoveredEvent.id)) return base;
+
+    return [...base, hoveredEvent];
+  }, [selectedEvents, previewGroupEvents, hoveredEvent, hidden]);
 
   const captureRef = useRef<HTMLDivElement | null>(null);
 
-    async function exportPng() {
+  async function exportPng() {
     if (!captureRef.current) return;
     const dataUrl = await toPng(captureRef.current, {
-        pixelRatio: 2,
-        backgroundColor: "#2b0a3d",
+      pixelRatio: 2,
+      backgroundColor: "#2b0a3d",
     });
 
     const a = document.createElement("a");
     a.href = dataUrl;
     a.download = "timetable.png";
     a.click();
-    }
-
+  }
 
   const days = daysInData(events);
   const byDay = layoutEventsByDay(eventsForLayout);
 
   const start = 8 * 60;
   const end = 20 * 60;
-  
+
   const heightPx = Math.max(1, (end - start) * PX_PER_MIN + GRID_PAD_TOP + GRID_PAD_BOTTOM);
 
   const hours: number[] = [];
@@ -86,18 +115,28 @@ export function Timetable({
     <div className="flex-1 overflow-auto">
       <div className="min-w-[900px] p-5">
         <div className="mb-3 flex items-center justify-between gap-3">
-        <div className="text-sm font-semibold text-white/80">Timetable</div>
+          <div className="text-sm font-semibold text-white/80">Timetable</div>
 
-        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3">
             <button
-            className="selection-ring rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[12px] font-medium text-white/80 hover:bg-white/10"
-            onClick={exportPng}
+              className="selection-ring rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[12px] font-medium text-white/80 hover:bg-white/10"
+              onClick={exportPng}
             >
-            <Upload className="h-4 w-4" />
+              <Upload className="h-4 w-4" />
             </button>
+          </div>
         </div>
-        </div>
-        <div ref={captureRef}  className="rounded-3xl border border-white/10 bg-white/5 backdrop-blur-xl shadow-[0_18px_60px_rgba(0,0,0,0.35)]">
+
+        <div
+          ref={captureRef}
+          className="rounded-3xl border border-white/10 bg-white/5 backdrop-blur-xl shadow-[0_18px_60px_rgba(0,0,0,0.35)]"
+          onClick={(ev) => {
+            const target = ev.target as HTMLElement | null;
+            if (!target) return;
+            if (target.closest("[data-event-card='1']")) return;
+            onPreviewGroupKeyChange(null);
+          }}
+        >
           <div
             className="grid border-b border-white/10"
             style={{ gridTemplateColumns: `80px repeat(${days.length}, minmax(0, 1fr))` }}
@@ -115,20 +154,21 @@ export function Timetable({
             style={{ gridTemplateColumns: `80px repeat(${days.length}, minmax(0, 1fr))` }}
           >
             <div className="relative border-r border-white/10" style={{ height: heightPx }}>
-            {hours.map((t) => {
-                const top = GRID_PAD_TOP + (t - start) * PX_PER_MIN; // if you added padding
+              {hours.map((t) => {
+                const top = GRID_PAD_TOP + (t - start) * PX_PER_MIN;
                 return (
-                <div
+                  <div
                     key={t}
                     className="absolute -translate-y-1/2 w-[80px] left-0 flex items-center justify-center
                             text-[16px] font-medium text-white/45 tabular-nums font-mono"
                     style={{ top }}
-                >
+                  >
                     {formatMinutes(t)}
-                </div>
+                  </div>
                 );
-            })}
+              })}
             </div>
+
             {days.map((d) => (
               <DayColumn
                 key={d}
@@ -139,6 +179,9 @@ export function Timetable({
                 hoveredId={hoveredId}
                 previewId={previewId}
                 onHoverChange={onHoverChange}
+                previewGroupKey={previewGroupKey}
+                onPreviewGroupKeyChange={onPreviewGroupKeyChange}
+                enabledIds={visibleSelected}
               />
             ))}
           </div>
@@ -156,6 +199,9 @@ function DayColumn({
   hoveredId,
   previewId,
   onHoverChange,
+  previewGroupKey,
+  onPreviewGroupKeyChange,
+  enabledIds,
 }: {
   events: PositionedEvent[];
   start: number;
@@ -164,6 +210,11 @@ function DayColumn({
   hoveredId: string | null;
   previewId: string | null;
   onHoverChange: (id: string | null) => void;
+
+  previewGroupKey: string | null;
+  onPreviewGroupKeyChange: (key: string | null) => void;
+
+  enabledIds: Set<string>;
 }) {
   const end = 20 * 60;
 
@@ -172,7 +223,6 @@ function DayColumn({
 
   return (
     <div className="relative border-r border-white/10" style={{ height: heightPx }}>
-      {/* gridlines BEHIND events */}
       <div
         style={{
           position: "absolute",
@@ -194,16 +244,13 @@ function DayColumn({
                 right: 0,
                 top,
                 height: 1,
-                backgroundColor: isHour
-                  ? "rgba(255,255,255,0.4)"
-                  : "rgba(255,255,255,0.03)",
+                backgroundColor: isHour ? "rgba(255,255,255,0.4)" : "rgba(255,255,255,0.03)",
               }}
             />
           );
         })}
       </div>
 
-      {/* events ON TOP */}
       {events.map((e) => (
         <EventCard
           key={e.id}
@@ -213,13 +260,14 @@ function DayColumn({
           hoveredId={hoveredId}
           previewId={previewId}
           onHoverChange={onHoverChange}
+          previewGroupKey={previewGroupKey}
+          onPreviewGroupKeyChange={onPreviewGroupKeyChange}
+          isEnabled={enabledIds.has(e.id)}
         />
       ))}
     </div>
   );
 }
-
-
 
 function EventCard({
   e,
@@ -228,6 +276,9 @@ function EventCard({
   hoveredId,
   previewId,
   onHoverChange,
+  previewGroupKey,
+  onPreviewGroupKeyChange,
+  isEnabled,
 }: {
   e: PositionedEvent;
   start: number;
@@ -235,9 +286,14 @@ function EventCard({
   hoveredId: string | null;
   previewId: string | null;
   onHoverChange: (id: string | null) => void;
+
+  previewGroupKey: string | null;
+  onPreviewGroupKeyChange: (key: string | null) => void;
+
+  isEnabled: boolean;
 }) {
-  const V_GAP = 8; // px (tweak: 2–6)
-  
+  const V_GAP = 8;
+
   const top = GRID_PAD_TOP + (e.startMin - start) * PX_PER_MIN + V_GAP / 2;
   const rawHeight = (e.endMin - e.startMin) * PX_PER_MIN;
   const height = Math.max(18, rawHeight - V_GAP);
@@ -252,24 +308,45 @@ function EventCard({
   )}\n${e.location}`;
 
   const isHovered = hoveredId === e.id;
-  const isPreview = previewId === e.id;
+
+  const groupKey = `${e.courseCode}::${classTypeFromClassCode(e.classCode)}`;
+  const isGroupActive = previewGroupKey === groupKey;
+
+  // Two kinds of preview:
+  // 1) hover-preview (previewId)
+  // 2) group-preview (active group + NOT enabled)
+  const isHoverPreview = previewId === e.id;
+  const isGroupPreview = isGroupActive && !isEnabled;
+
+  // For selected/enabled cards in an active group, highlight like hover
+  const isGroupHighlight = isGroupActive && isEnabled;
 
   const accent = courseToColor(e.courseCode);
-  const bg = hexToRgba(accent, isPreview ? 0.3 : 0.9);
-  const border = hexToRgba(accent, isHovered ? 0.5 : 0.6);
+
+  // Make preview cards slightly more transparent:
+  // - hover preview: 0.22
+  // - group preview: 0.18 (a bit more transparent than hover preview)
+  const bgAlpha = isGroupPreview ? 0.18 : isHoverPreview ? 0.22 : 0.9;
+  const bg = hexToRgba(accent, bgAlpha);
+
+  const border = hexToRgba(accent, isHovered || isGroupHighlight ? 0.5 : 0.6);
 
   return (
     <div
+      data-event-card="1"
       title={isTiny ? tooltip : undefined}
       onMouseEnter={() => onHoverChange(e.id)}
       onMouseLeave={() => onHoverChange(null)}
+      onClick={() => {
+        onPreviewGroupKeyChange(isGroupActive ? null : groupKey);
+      }}
       className={clsx(
         "group absolute overflow-hidden rounded-2xl px-3 py-2 text-white",
         "border bg-white/5 backdrop-blur-md",
         "shadow-[0_10px_26px_rgba(0,0,0,0.30)]",
         "hover:bg-white/7",
-        isHovered && !isPreview && "ring-2 ring-white/20",
-        isPreview && "opacity-60"
+        (isHovered || isGroupHighlight) && "ring-2 ring-white/20",
+        (isHoverPreview || isGroupPreview) && "opacity-75"
       )}
       style={{
         top,
@@ -278,39 +355,43 @@ function EventCard({
         width: `calc(${widthPct}% - ${gap}px)`,
         background: bg,
         borderColor: border,
-        borderStyle: isPreview ? "dashed" : "solid",
+        borderStyle: isHoverPreview || isGroupPreview ? "dashed" : "solid",
+        cursor: "pointer",
       }}
     >
       <div className="absolute left-0 top-0 h-full w-1" style={{ background: accent }} />
-        <button
+
+      <button
         className={clsx(
-            "absolute z-10",
-            "opacity-0 group-hover:opacity-100 transition-opacity",
-            "rounded-md bg-black/30 hover:bg-black/45",
-            "p-[3px] border border-white/10"
+          "absolute z-10",
+          "opacity-0 group-hover:opacity-100 transition-opacity",
+          "rounded-md bg-black/30 hover:bg-black/45",
+          "p-[3px] border border-white/10"
         )}
-        style={{ top: 2, right: 2, left: "auto" }}   // <- hard force right
+        style={{ top: 2, right: 2, left: "auto" }}
         onClick={(ev) => {
-            ev.stopPropagation();
-            if (!isPreview) onDeselect(e.id);
+          ev.stopPropagation();
+
+          // If not enabled, this acts as "+" (add)
+          // If enabled, this acts as "X" (remove)
+          onDeselect(e.id);
         }}
-        disabled={isPreview}
-        title="Remove"
-        aria-label="Remove"
-        >
-        <X className="h-5 w-5" />
-        </button>
+        title={!isEnabled ? "Add" : "Remove"}
+        aria-label={!isEnabled ? "Add" : "Remove"}
+      >
+        {!isEnabled ? <Plus className="h-5 w-5" /> : <X className="h-5 w-5" />}
+      </button>
+
       <div className="min-w-0 pl-2 pr-6">
-        {/* Bold is driven by hoveredId, which now comes from BOTH sidebar and timetable hover */}
         <div
           className="truncate text-[12px] leading-4"
-          style={{ fontWeight: isHovered ? 800 : 600 }}
+          style={{ fontWeight: isHovered || isGroupHighlight ? 800 : 600 }}
         >
           {e.courseCode}
         </div>
         <div
           className="truncate text-[11px] text-white/80"
-          style={{ fontWeight: isHovered ? 800 : 500 }}
+          style={{ fontWeight: isHovered || isGroupHighlight ? 800 : 500 }}
         >
           {e.classCode}
         </div>

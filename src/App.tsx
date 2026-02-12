@@ -14,9 +14,6 @@ type PersistedStateV2 = {
 };
 
 function countAllocatedHours(events: { day: string; startMin: number; endMin: number }[]): number {
-  // Counts unique hour-blocks (day,hour) that have ANY coverage
-  // e.g. 12:00–15:00 -> hours 12,13,14
-  // e.g. 12:30–13:10 -> hours 12,13
   const used = new Set<string>();
   for (const e of events) {
     const startHour = Math.floor(e.startMin / 60);
@@ -33,10 +30,13 @@ export default function App() {
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [hidden, setHidden] = useState<Set<string>>(() => new Set());
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+
+  // click-preview group (course + type e.g. PRA1)
+  const [previewGroupKey, setPreviewGroupKey] = useState<string | null>(null);
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Restore last timetable (best effort)
   useEffect(() => {
     try {
       const raw = localStorage.getItem(LS_KEY);
@@ -48,7 +48,6 @@ export default function App() {
       if (!Array.isArray(parsed.selectedIds)) throw new Error("Bad selectedIds");
       if (!Array.isArray(parsed.hiddenIds)) throw new Error("Bad hiddenIds");
 
-      // basic structural validation
       for (const e of parsed.events) {
         if (
           typeof e?.id !== "string" ||
@@ -76,7 +75,6 @@ export default function App() {
     }
   }, []);
 
-  // Persist timetable + selection + hidden state
   useEffect(() => {
     try {
       if (events.length === 0) {
@@ -84,16 +82,11 @@ export default function App() {
         return;
       }
 
-      // Keep enabled in events in-sync for future CSV export / round-tripping
       const eventsWithEnabled: ClassEvent[] = events.map((e) => ({
         ...e,
-        // force enabled to be 0|1
         enabled: e.enabled ? 1 : 0,
-
-        // force allocatedHours to exist (not optional)
         allocatedHours: e.allocatedHours ?? (e.endMin - e.startMin) / 60,
       }));
-
 
       const payload: PersistedStateV2 = {
         v: 2,
@@ -134,6 +127,7 @@ export default function App() {
 
   function clearAll() {
     setSelected(new Set());
+    setPreviewGroupKey(null);
   }
 
   function showAll() {
@@ -147,22 +141,22 @@ export default function App() {
       const parsed = await parseClassesCsv(file);
       setEvents(parsed);
 
-      // CSV-driven selection default: Enabled=1 rows are selected
       setSelected(new Set(parsed.filter((e) => e.enabled === 1).map((e) => e.id)));
       setHidden(new Set());
       setHoveredId(null);
+      setPreviewGroupKey(null);
     } catch (e: any) {
       setError(e?.message ?? String(e));
       setEvents([]);
       setSelected(new Set());
       setHidden(new Set());
       setHoveredId(null);
+      setPreviewGroupKey(null);
     } finally {
       setLoading(false);
     }
   }
 
-  // ---- Allocated hours (unique hour blocks across SELECTED, regardless of hidden) ----
   const selectedEventsForCount = useMemo(
     () => events.filter((e) => selected.has(e.id)),
     [events, selected]
@@ -199,6 +193,8 @@ export default function App() {
         hoveredId={hoveredId}
         onHoverChange={setHoveredId}
         onDeselect={(id) => toggleSelected(id)}
+        previewGroupKey={previewGroupKey}
+        onPreviewGroupKeyChange={setPreviewGroupKey}
       />
     </div>
   );
