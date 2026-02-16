@@ -218,11 +218,15 @@ function DayColumn({
 }) {
   const end = 20 * 60;
 
-  const ticks: number[] = [];
-  for (let t = start + 30; t < end; t += 30) ticks.push(t);
+  const bandHeight = 30 * PX_PER_MIN; // half hour
+  const totalMinutes = end - start;
+  const bandCount = Math.ceil(totalMinutes / 30);
+
+  const INSET_X = 2; // how much the stripes are inset horizontally
 
   return (
     <div className="relative border-r border-white/10" style={{ height: heightPx }}>
+      {/* ---- STRIPY HALF-HOUR BACKGROUND ---- */}
       <div
         style={{
           position: "absolute",
@@ -231,26 +235,38 @@ function DayColumn({
           pointerEvents: "none",
         }}
       >
-        {ticks.map((t) => {
-          const isHour = t % 60 === 0;
-          const top = GRID_PAD_TOP + (t - start) * PX_PER_MIN;
+        {Array.from({ length: bandCount }).map((_, i) => {
+          const top = GRID_PAD_TOP + i * bandHeight;
+
+          const isEven = i % 2 === 0;
+
+          const background = isEven
+            ? "rgba(255,255,255,0.025)"
+            : "rgba(0,0,0,0.06)";
+
+          const isHourStart = i % 2 === 0;
 
           return (
             <div
-              key={t}
+              key={`band-${i}`}
               style={{
                 position: "absolute",
-                left: 0,
-                right: 0,
+                left: INSET_X,
+                right: INSET_X,
                 top,
-                height: 1,
-                backgroundColor: isHour ? "rgba(255,255,255,0.4)" : "rgba(255,255,255,0.03)",
+                height: bandHeight,
+                background,
+                borderTop: isHourStart
+                  ? "1px solid rgba(255,255,255,0.08)"
+                  : "none",
+                borderRadius: 8,
               }}
             />
           );
         })}
       </div>
 
+      {/* ---- EVENTS ON TOP ---- */}
       {events.map((e) => (
         <EventCard
           key={e.id}
@@ -268,6 +284,7 @@ function DayColumn({
     </div>
   );
 }
+
 
 function EventCard({
   e,
@@ -300,7 +317,8 @@ function EventCard({
 
   const leftPct = (e.col / e.cols) * 100;
   const widthPct = 100 / e.cols;
-  const gap = 8;
+  const gap = 13;
+  const CARD_NUDGE_X = -1.5; // px (negative moves left)
 
   const isTiny = height < 42;
   const tooltip = `${e.courseCode} ${e.classCode}\n${formatMinutes(e.startMin)}–${formatMinutes(
@@ -312,24 +330,17 @@ function EventCard({
   const groupKey = `${e.courseCode}::${classTypeFromClassCode(e.classCode)}`;
   const isGroupActive = previewGroupKey === groupKey;
 
-  // Two kinds of preview:
-  // 1) hover-preview (previewId)
-  // 2) group-preview (active group + NOT enabled)
   const isHoverPreview = previewId === e.id;
   const isGroupPreview = isGroupActive && !isEnabled;
-
-  // For selected/enabled cards in an active group, highlight like hover
   const isGroupHighlight = isGroupActive && isEnabled;
 
   const accent = courseToColor(e.courseCode);
 
-  // Make preview cards slightly more transparent:
-  // - hover preview: 0.22
-  // - group preview: 0.18 (a bit more transparent than hover preview)
-  const bgAlpha = isGroupPreview ? 0.18 : isHoverPreview ? 0.22 : 0.9;
+  // Stronger tint so it shows, but still "glass"
+  const bgAlpha = isGroupPreview ? 0.16 : isHoverPreview ? 0.20 : 0.70;
   const bg = hexToRgba(accent, bgAlpha);
 
-  const border = hexToRgba(accent, isHovered || isGroupHighlight ? 0.5 : 0.6);
+  const border = hexToRgba(accent, isHovered || isGroupHighlight ? 0.60 : 0.45);
 
   return (
     <div
@@ -341,48 +352,71 @@ function EventCard({
         onPreviewGroupKeyChange(isGroupActive ? null : groupKey);
       }}
       className={clsx(
-        "group absolute overflow-hidden rounded-2xl px-3 py-2 text-white",
-        "border bg-white/5 backdrop-blur-md",
-        "shadow-[0_10px_26px_rgba(0,0,0,0.30)]",
-        "hover:bg-white/7",
-        (isHovered || isGroupHighlight) && "ring-2 ring-white/20",
-        (isHoverPreview || isGroupPreview) && "opacity-75"
+        "group absolute overflow-hidden rounded-[10px] px-3 py-2 text-white",
+        // glass layer (kept subtle because we're tinting the bg now)
+        "border border-white/10 backdrop-blur-2xl",
+        "shadow-[0_12px_30px_rgba(0,0,0,0.35)]",
+        "ring-1 ring-white/10",
+        "hover:brightness-[1.03]",
+        (isHovered || isGroupHighlight) && "ring-2 ring-white/25",
+        (isHoverPreview || isGroupPreview) && "opacity-80"
       )}
       style={{
         top,
         height,
-        left: `calc(${leftPct}% + ${gap / 2}px)`,
+        left: `calc(${leftPct}% + ${gap / 2 + CARD_NUDGE_X}px)`,
         width: `calc(${widthPct}% - ${gap}px)`,
-        background: bg,
+        backgroundColor: bg,
         borderColor: border,
         borderStyle: isHoverPreview || isGroupPreview ? "dashed" : "solid",
         cursor: "pointer",
       }}
     >
-      <div className="absolute left-0 top-0 h-full w-1" style={{ background: accent }} />
+      {/* Top sheen */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-14 bg-gradient-to-b from-white/28 to-transparent" />
+
+      {/* Inner highlight */}
+      <div className="pointer-events-none absolute inset-0 rounded-[10px] shadow-[inset_0_1px_0_rgba(255,255,255,0.18)]" />
+
+      {/* Subtle bottom shading for depth */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-black/20 to-transparent" />
+
+      {/* Left accent bar */}
+      <div
+        className="absolute left-0 top-0 h-full w-1"
+        style={{
+          background: `linear-gradient(to bottom, ${hexToRgba(accent, 0.95)}, ${hexToRgba(
+            accent,
+            0.55
+          )})`,
+        }}
+      />
 
       <button
         className={clsx(
           "absolute z-10",
           "opacity-0 group-hover:opacity-100 transition-opacity",
-          "rounded-md bg-black/30 hover:bg-black/45",
-          "p-[3px] border border-white/10"
+          "rounded-[10px] border border-white/15 bg-white/10 backdrop-blur-2xl",
+          "shadow-[0_8px_18px_rgba(0,0,0,0.25)]",
+          "hover:bg-white/15 active:bg-white/20",
+          "p-[2px]"
         )}
         style={{ top: 2, right: 2, left: "auto" }}
         onClick={(ev) => {
           ev.stopPropagation();
-
-          // If not enabled, this acts as "+" (add)
-          // If enabled, this acts as "X" (remove)
           onDeselect(e.id);
         }}
         title={!isEnabled ? "Add" : "Remove"}
         aria-label={!isEnabled ? "Add" : "Remove"}
       >
-        {!isEnabled ? <Plus className="h-5 w-5" /> : <X className="h-5 w-5" />}
+        {!isEnabled ? (
+          <Plus className="h-[14px] w-[17px] translate-y-[1.5px]" strokeWidth={1.8} />
+        ) : (
+          <X className="h-[14px] w-[17px] translate-y-[1.5px]" strokeWidth={1.8} />
+        )}
       </button>
 
-      <div className="min-w-0 pl-2 pr-6">
+      <div className="min-w-0 pl-2 pr-6 relative">
         <div
           className="truncate text-[12px] leading-4"
           style={{ fontWeight: isHovered || isGroupHighlight ? 800 : 600 }}

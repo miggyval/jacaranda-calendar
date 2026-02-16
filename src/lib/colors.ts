@@ -1,17 +1,30 @@
 const UQ_PALETTE = [
-  "#51247a", // uq purple
-  "#962a8b", // magenta
-  "#2ea836", // green
-  "#eb602b", // orange
-  "#4085c6", // blue
+  "#51247a",
+  "#962a8b",
+  "#2ea836",
+  "#eb602b",
+  "#4085c6",
+  "#00a2c7",
+  "#e62645",
+  "#fbb800",
+  "#bb9d65",
+  "#999490",
+  "#d7d1cc"
 ];
 
+const courseColorMap = new Map<string, string>();
+let nextColorIndex = 0;
+
 export function courseToColor(courseCode: string): string {
-  // stable hash -> stable palette index
-  let h = 0;
-  for (let i = 0; i < courseCode.length; i++) h = (h * 31 + courseCode.charCodeAt(i)) >>> 0;
-  return UQ_PALETTE[h % UQ_PALETTE.length];
+  if (!courseColorMap.has(courseCode)) {
+    const color = UQ_PALETTE[nextColorIndex];
+    courseColorMap.set(courseCode, color);
+    nextColorIndex = (nextColorIndex + 1) % UQ_PALETTE.length;
+  }
+
+  return courseColorMap.get(courseCode)!;
 }
+
 
 export function hexToRgba(hex: string, alpha: number): string {
   const clean = hex.replace("#", "");
