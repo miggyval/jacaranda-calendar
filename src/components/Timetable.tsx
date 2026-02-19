@@ -354,7 +354,7 @@ function EventCard({
       className={clsx(
         "group absolute overflow-hidden rounded-[10px] px-3 py-2 text-white",
         // glass layer (kept subtle because we're tinting the bg now)
-        "border border-white/10 backdrop-blur-2xl",
+        "border border-white/10 backdrop-blur-xl",
         "shadow-[0_12px_30px_rgba(0,0,0,0.35)]",
         "ring-1 ring-white/10",
         "hover:brightness-[1.03]",
@@ -396,7 +396,7 @@ function EventCard({
         className={clsx(
           "absolute z-10",
           "opacity-0 group-hover:opacity-100 transition-opacity",
-          "rounded-[10px] border border-white/15 bg-white/10 backdrop-blur-2xl",
+          "rounded-[10px] border border-white/15 bg-white/10 backdrop-blur-xl",
           "shadow-[0_8px_18px_rgba(0,0,0,0.25)]",
           "hover:bg-white/15 active:bg-white/20",
           "p-[2px]"

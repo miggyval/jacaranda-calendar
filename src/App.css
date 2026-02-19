@@ -1,3 +1,10 @@
+@font-face {
+  font-family: 'MyCustomFont';
+  src: url('./assets/fonts/Gotham-Light.otf') format('otf');
+  font-weight: 400;
+  font-style: light;
+}
+
 #root {
   max-width: 1280px;
   margin: 0 auto;

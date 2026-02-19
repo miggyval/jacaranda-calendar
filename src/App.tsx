@@ -169,6 +169,9 @@ export default function App() {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden text-white">
+      <head>
+      <link href="https://fonts.googleapis.com" rel="stylesheet"/>
+      </head>
       <Sidebar
         events={events}
         selected={selected}
