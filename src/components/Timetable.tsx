@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toPng } from "html-to-image";
 import { X, Upload, Plus } from "lucide-react";
 import clsx from "clsx";
@@ -6,6 +6,126 @@ import { daysInData, layoutEventsByDay } from "../lib/layout";
 import { formatMinutes } from "../lib/time";
 import { courseToColor, hexToRgba } from "../lib/colors";
 import type { ClassEvent, PositionedEvent } from "../lib/types";
+import JSZip from "jszip";
+
+const ICS_TZID = "Australia/Brisbane";
+
+// Pick the Monday of the week you want the export to represent.
+// Change this to whatever week you want (YYYY-MM-DD).
+const EXPORT_WEEK_START = "2026-02-23"; // Monday
+
+function pad2(n: number) {
+  return String(n).padStart(2, "0");
+}
+
+function safeFilename(s: string) {
+  return s.replace(/[^a-z0-9._-]+/gi, "_");
+}
+
+
+
+
+function escapeIcsText(s: string) {
+  // iCal requires escaping backslashes, commas, semicolons, and newlines
+  return s
+    .replace(/\\/g, "\\\\")
+    .replace(/\n/g, "\\n")
+    .replace(/,/g, "\\,")
+    .replace(/;/g, "\\;");
+}
+
+function ymdToDateLocal(ymd: string) {
+  // Local date (no timezone parsing surprises)
+  const [y, m, d] = ymd.split("-").map(Number);
+  return new Date(y, (m ?? 1) - 1, d ?? 1, 0, 0, 0, 0);
+}
+
+function dayToOffset(d: string) {
+  // Must match your days labels (MON/TUE/...)
+  switch (d) {
+    case "MON": return 0;
+    case "TUE": return 1;
+    case "WED": return 2;
+    case "THU": return 3;
+    case "FRI": return 4;
+    case "SAT": return 5;
+    case "SUN": return 6;
+    default: return 0;
+  }
+}
+
+function dateWithMinutes(base: Date, minutes: number) {
+  const dt = new Date(base);
+  dt.setHours(0, 0, 0, 0);
+  dt.setMinutes(minutes);
+  return dt;
+}
+
+function icsLocalDateTime(dt: Date) {
+  // YYYYMMDDTHHMMSS (local time)
+  const y = dt.getFullYear();
+  const m = pad2(dt.getMonth() + 1);
+  const d = pad2(dt.getDate());
+  const hh = pad2(dt.getHours());
+  const mm = pad2(dt.getMinutes());
+  const ss = pad2(dt.getSeconds());
+  return `${y}${m}${d}T${hh}${mm}${ss}`;
+}
+
+function downloadTextFile(filename: string, text: string, mime = "text/calendar;charset=utf-8") {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function buildIcsForEvents(events: ClassEvent[], weekStartYmd: string) {
+  const weekStart = ymdToDateLocal(weekStartYmd);
+
+  const now = new Date();
+  const dtstamp = icsLocalDateTime(now);
+
+  const lines: string[] = [];
+  lines.push("BEGIN:VCALENDAR");
+  lines.push("VERSION:2.0");
+  lines.push("PRODID:-//UQ Timetable Planner//EN");
+  lines.push("CALSCALE:GREGORIAN");
+
+  for (const e of events) {
+    const dayOffset = dayToOffset(e.day);
+    const dayDate = new Date(weekStart);
+    dayDate.setDate(weekStart.getDate() + dayOffset);
+
+    const startDt = dateWithMinutes(dayDate, e.startMin);
+    const endDt = dateWithMinutes(dayDate, e.endMin);
+
+    const uid = `${e.id}-${weekStartYmd}@uqtimetable`;
+
+    const summary = `${e.courseCode} ${e.classCode}`;
+    const description = `${e.courseCode} ${e.classCode}\\n${formatMinutes(e.startMin)}–${formatMinutes(
+      e.endMin
+    )}\\n${e.location}`;
+
+    lines.push("BEGIN:VEVENT");
+    lines.push(`UID:${escapeIcsText(uid)}`);
+    lines.push(`DTSTAMP:${dtstamp}`);
+    lines.push(`SUMMARY:${escapeIcsText(summary)}`);
+    lines.push(`LOCATION:${escapeIcsText(e.location)}`);
+    lines.push(`DESCRIPTION:${escapeIcsText(description)}`);
+    lines.push(`DTSTART;TZID=${ICS_TZID}:${icsLocalDateTime(startDt)}`);
+    lines.push(`DTEND;TZID=${ICS_TZID}:${icsLocalDateTime(endDt)}`);
+    lines.push("END:VEVENT");
+  }
+
+  lines.push("END:VCALENDAR");
+
+  // iCal expects CRLF line endings
+  return lines.join("\r\n") + "\r\n";
+}
+
 
 type Props = {
   events: ClassEvent[];
@@ -58,6 +178,24 @@ export function Timetable({
     [events, hoveredId]
   );
 
+  function exportIcalPerCourse() {
+    // selectedEvents is already "selected AND not hidden" in your code
+    const byCourse = new Map<string, ClassEvent[]>();
+
+    for (const e of selectedEvents) {
+      const key = e.courseCode;
+      const arr = byCourse.get(key) ?? [];
+      arr.push(e);
+      byCourse.set(key, arr);
+    }
+
+    for (const [courseCode, evs] of byCourse) {
+      const ics = buildIcsForEvents(evs, EXPORT_WEEK_START);
+      downloadTextFile(`${safeFilename(courseCode)}.ics`, ics);
+    }
+  }
+
+
   // hover-preview (sidebar hover over non-selected)
   const previewId =
     hoveredEvent && !visibleSelected.has(hoveredEvent.id) ? hoveredEvent.id : null;
@@ -86,6 +224,45 @@ export function Timetable({
   }, [selectedEvents, previewGroupEvents, hoveredEvent, hidden]);
 
   const captureRef = useRef<HTMLDivElement | null>(null);
+
+
+  function exportIcal() {
+    // Export only the selected (and not hidden) events.
+    const ics = buildIcsForEvents(selectedEvents, EXPORT_WEEK_START);
+    downloadTextFile("timetable.ics", ics);
+  }
+
+  async function exportIcalZipPerCourse() {
+    // group selected events by course
+    const byCourse = new Map<string, ClassEvent[]>();
+    for (const e of selectedEvents) {
+      const key = e.courseCode;
+      const arr = byCourse.get(key) ?? [];
+      arr.push(e);
+      byCourse.set(key, arr);
+    }
+
+    // build zip
+    const zip = new JSZip();
+    const folder = zip.folder("iCal_by_course")!;
+
+    for (const [courseCode, evs] of byCourse) {
+      const ics = buildIcsForEvents(evs, EXPORT_WEEK_START);
+
+      // .ics files are just UTF-8 text
+      folder.file(`${safeFilename(courseCode)}.ics`, ics);
+    }
+
+    const blob = await zip.generateAsync({ type: "blob" });
+
+    // download blob
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `timetables_by_course_${EXPORT_WEEK_START}.zip`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 
   async function exportPng() {
     if (!captureRef.current) return;
@@ -118,6 +295,30 @@ export function Timetable({
           <div className="text-sm font-semibold text-white/80">Timetable</div>
 
           <div className="flex items-center gap-3">
+            <button
+              className="selection-ring rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[12px] font-medium text-white/80 hover:bg-white/10"
+              onClick={exportIcalZipPerCourse}
+              title="Export one .ics per course"
+            >
+              iCal (per course)
+            </button>
+            <button
+              className="selection-ring rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[12px] font-medium text-white/80 hover:bg-white/10"
+              onClick={exportIcalPerCourse}
+              title="Export one .ics per course"
+            >
+              iCal (per course)
+            </button>
+
+            <button
+              className="selection-ring rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[12px] font-medium text-white/80 hover:bg-white/10"
+              onClick={exportIcal}
+              title="Export iCal"
+            >
+              {/* reuse an icon if you want; or just text */}
+              iCal
+            </button>
+
             <button
               className="selection-ring rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[12px] font-medium text-white/80 hover:bg-white/10"
               onClick={exportPng}
@@ -336,11 +537,16 @@ function EventCard({
 
   const accent = courseToColor(e.courseCode);
 
-  // Stronger tint so it shows, but still "glass"
-  const bgAlpha = isGroupPreview ? 0.16 : isHoverPreview ? 0.20 : 0.70;
+  const bgAlpha = isGroupPreview ? 0.40 : isHoverPreview ? 0.80 : 0.75;
   const bg = hexToRgba(accent, bgAlpha);
+  const border = hexToRgba(accent, isHovered || isGroupHighlight ? 0.2 : 0.8);
+  
+  const [mounted, setMounted] = useState(false);
 
-  const border = hexToRgba(accent, isHovered || isGroupHighlight ? 0.60 : 0.45);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setMounted(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
 
   return (
     <div
@@ -353,13 +559,16 @@ function EventCard({
       }}
       className={clsx(
         "group absolute overflow-hidden rounded-[10px] px-3 py-2 text-white",
-        // glass layer (kept subtle because we're tinting the bg now)
-        "border border-white/10 backdrop-blur-xl",
-        "shadow-[0_12px_30px_rgba(0,0,0,0.35)]",
-        "ring-1 ring-white/10",
+        "[transition-property:top,left,width,height,transform,opacity]",
+        "[transition-duration:350ms,350ms,350ms,350ms,350ms,250ms]",
+        "[transition-delay:0ms,0ms,0ms,0ms,0ms,150ms]",
+        "[transition-timing-function:cubic-bezier(0.4,0,0.2,1)]",
+        "will-change-[opacity,transform,top,left,width,height]",
         "hover:brightness-[1.03]",
-        (isHovered || isGroupHighlight) && "ring-2 ring-white/25",
-        (isHoverPreview || isGroupPreview) && "opacity-80"
+        !mounted && "opacity-0 translate-y-1",
+        mounted && "opacity-100 translate-y-0",
+        (isHovered || isGroupHighlight) && "ring-1",
+        (isHoverPreview || isGroupPreview) && "opacity-50"
       )}
       style={{
         top,
@@ -372,25 +581,6 @@ function EventCard({
         cursor: "pointer",
       }}
     >
-      {/* Top sheen */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-14 bg-gradient-to-b from-white/28 to-transparent" />
-
-      {/* Inner highlight */}
-      <div className="pointer-events-none absolute inset-0 rounded-[10px] shadow-[inset_0_1px_0_rgba(255,255,255,0.18)]" />
-
-      {/* Subtle bottom shading for depth */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-black/20 to-transparent" />
-
-      {/* Left accent bar */}
-      <div
-        className="absolute left-0 top-0 h-full w-1"
-        style={{
-          background: `linear-gradient(to bottom, ${hexToRgba(accent, 0.95)}, ${hexToRgba(
-            accent,
-            0.55
-          )})`,
-        }}
-      />
 
       <button
         className={clsx(
