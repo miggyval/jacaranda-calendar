@@ -81,12 +81,41 @@ function downloadTextFile(filename: string, text: string, mime = "text/calendar;
   a.click();
   URL.revokeObjectURL(url);
 }
-
 function buildIcsForEvents(events: ClassEvent[], weekStartYmd: string) {
   const weekStart = ymdToDateLocal(weekStartYmd);
 
   const now = new Date();
   const dtstamp = icsLocalDateTime(now);
+
+  // Sem 1 ends 20 June (inclusive) — stop recurrences at end of that day.
+  // IMPORTANT: For best compatibility, RRULE UNTIL should be UTC and end with "Z".
+  const semEndLocal = ymdToDateLocal("2026-06-20");
+  semEndLocal.setHours(23, 59, 59, 0);
+  const untilUtcZ = icsUtcDateTimeZ(semEndLocal);
+
+  function dayToByday(d: string) {
+    switch (d) {
+      case "MON": return "MO";
+      case "TUE": return "TU";
+      case "WED": return "WE";
+      case "THU": return "TH";
+      case "FRI": return "FR";
+      case "SAT": return "SA";
+      case "SUN": return "SU";
+      default: return "MO";
+    }
+  }
+
+  function icsUtcDateTimeZ(dt: Date) {
+    // YYYYMMDDTHHMMSSZ (UTC)
+    const y = dt.getUTCFullYear();
+    const m = pad2(dt.getUTCMonth() + 1);
+    const d = pad2(dt.getUTCDate());
+    const hh = pad2(dt.getUTCHours());
+    const mm = pad2(dt.getUTCMinutes());
+    const ss = pad2(dt.getUTCSeconds());
+    return `${y}${m}${d}T${hh}${mm}${ss}Z`;
+  }
 
   const lines: string[] = [];
   lines.push("BEGIN:VCALENDAR");
@@ -102,12 +131,18 @@ function buildIcsForEvents(events: ClassEvent[], weekStartYmd: string) {
     const startDt = dateWithMinutes(dayDate, e.startMin);
     const endDt = dateWithMinutes(dayDate, e.endMin);
 
-    const uid = `${e.id}-${weekStartYmd}@uqtimetable`;
+    // Stable UID so re-imports update the same recurring series (less duplication).
+    const uid = `${e.id}@uqtimetable`;
 
     const summary = `${e.courseCode} ${e.classCode}`;
-    const description = `${e.courseCode} ${e.classCode}\\n${formatMinutes(e.startMin)}–${formatMinutes(
-      e.endMin
-    )}\\n${e.location}`;
+
+    // Use REAL newlines here; escapeIcsText() will convert them to "\n" for iCal.
+    const description =
+      `${e.courseCode} ${e.classCode}\n` +
+      `${formatMinutes(e.startMin)}–${formatMinutes(e.endMin)}\n` +
+      `${e.location}`;
+
+    const byday = dayToByday(e.day);
 
     lines.push("BEGIN:VEVENT");
     lines.push(`UID:${escapeIcsText(uid)}`);
@@ -115,8 +150,14 @@ function buildIcsForEvents(events: ClassEvent[], weekStartYmd: string) {
     lines.push(`SUMMARY:${escapeIcsText(summary)}`);
     lines.push(`LOCATION:${escapeIcsText(e.location)}`);
     lines.push(`DESCRIPTION:${escapeIcsText(description)}`);
+
+    // First occurrence is anchored to EXPORT_WEEK_START (weekStartYmd).
     lines.push(`DTSTART;TZID=${ICS_TZID}:${icsLocalDateTime(startDt)}`);
     lines.push(`DTEND;TZID=${ICS_TZID}:${icsLocalDateTime(endDt)}`);
+
+    // Weekly recurrence, ending at Sem 1 end date (UTC UNTIL for compatibility).
+    lines.push(`RRULE:FREQ=WEEKLY;BYDAY=${byday};WKST=MO;UNTIL=${untilUtcZ}`);
+
     lines.push("END:VEVENT");
   }
 
