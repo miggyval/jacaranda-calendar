@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { Check, Download, X } from "lucide-react";
 import clsx from "clsx";
 import { formatMinutes } from "../lib/time";
+import { listSemesters, semesterValue, parseSemesterValue, type SemesterSel } from "../lib/semester";
 import type { ClassEvent } from "../lib/types";
 
 type Props = {
@@ -16,6 +17,9 @@ type Props = {
   hoveredId: string | null;
   onHoverChange: (id: string | null) => void;
   onImport: (file: File) => void;
+  onAddCourses: (input: string) => void;
+  semester: SemesterSel;
+  onSemesterChange: (s: SemesterSel) => void;
   loading: boolean;
   error?: string | null;
   allocatedHours: number;
@@ -77,6 +81,9 @@ export function Sidebar({
   hoveredId,
   onHoverChange,
   onImport,
+  onAddCourses,
+  semester,
+  onSemesterChange,
   loading,
   error,
   allocatedHours,
@@ -84,6 +91,14 @@ export function Sidebar({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [q, setQ] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("numeric");
+  const [courseInput, setCourseInput] = useState("");
+
+  function submitAddCourses() {
+    const v = courseInput.trim();
+    if (!v) return;
+    onAddCourses(v);
+    setCourseInput("");
+  }
 
   const filtered = useMemo(() => {
     const query = q.trim().toLowerCase();
@@ -197,6 +212,45 @@ export function Sidebar({
               e.currentTarget.value = "";
             }}
           />
+        </div>
+
+        {/* Import from UQ: pick the semester, then add by course code, offering code, or link */}
+        <div className="mt-3 flex items-center gap-2">
+          <select
+            value={semesterValue(semester)}
+            onChange={(e) => {
+              const next = parseSemesterValue(e.target.value);
+              if (next) onSemesterChange(next);
+            }}
+            className="selection-ring w-[120px] shrink-0 rounded-lg border border-white/10 bg-black/25 px-2 py-2 text-[12px] text-white/80 outline-none"
+            title="Semester to import classes for"
+          >
+            {listSemesters().map(({ sel, label }) => (
+              <option key={semesterValue(sel)} value={semesterValue(sel)} className="bg-[#0b0f14]">
+                {label}
+              </option>
+            ))}
+          </select>
+
+          <input
+            value={courseInput}
+            onChange={(e) => setCourseInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") submitAddCourses();
+            }}
+            placeholder="Add course code…"
+            disabled={loading}
+            className="selection-ring w-full rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-[12px] outline-none placeholder:text-white/35 disabled:opacity-40"
+          />
+
+          <button
+            onClick={submitAddCourses}
+            disabled={loading || !courseInput.trim()}
+            className="selection-ring shrink-0 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[12px] font-medium text-white/80 hover:bg-white/10 disabled:opacity-30"
+            title="Fetch from UQ timetable"
+          >
+            Add
+          </button>
         </div>
 
         <div className="mt-3 flex items-center gap-2">

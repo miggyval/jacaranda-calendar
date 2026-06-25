@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { Timetable } from "./components/Timetable";
 import { parseClassesCsv } from "./lib/parseCsv";
+import { fetchCourseEvents } from "./lib/uqApi";
+import { defaultSemester, loadSemester, saveSemester, type SemesterSel } from "./lib/semester";
 import type { ClassEvent } from "./lib/types";
 
 const LS_KEY = "uq_timetable_state_v2";
@@ -25,11 +27,27 @@ function countAllocatedHours(events: { day: string; startMin: number; endMin: nu
   return used.size;
 }
 
+// Merge fetched classes into the existing set, de-duping by id (existing wins).
+function mergeEvents(prev: ClassEvent[], incoming: ClassEvent[]): ClassEvent[] {
+  const byId = new Map(prev.map((e) => [e.id, e] as const));
+  for (const e of incoming) if (!byId.has(e.id)) byId.set(e.id, e);
+  const merged = Array.from(byId.values());
+  merged.sort((a, b) => {
+    if (a.day !== b.day) return a.day.localeCompare(b.day);
+    if (a.startMin !== b.startMin) return a.startMin - b.startMin;
+    return a.endMin - b.endMin;
+  });
+  return merged;
+}
+
 export default function App() {
   const [events, setEvents] = useState<ClassEvent[]>([]);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [hidden, setHidden] = useState<Set<string>>(() => new Set());
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+
+  // "Current semester" setting used when importing from UQ. Persisted separately.
+  const [semester, setSemester] = useState<SemesterSel>(() => loadSemester() ?? defaultSemester());
 
   // click-preview group (course + type e.g. PRA1)
   const [previewGroupKey, setPreviewGroupKey] = useState<string | null>(null);
@@ -101,6 +119,10 @@ export default function App() {
     }
   }, [events, selected, hidden]);
 
+  useEffect(() => {
+    saveSemester(semester);
+  }, [semester]);
+
   const allIds = useMemo(() => events.map((e) => e.id), [events]);
 
   function toggleSelected(id: string) {
@@ -157,6 +179,31 @@ export default function App() {
     }
   }
 
+  // Fetch one or more course codes from UQ and merge them into the current timetable.
+  async function addCourses(input: string) {
+    const tokens = input.split(/[\s,]+/).map((t) => t.trim()).filter(Boolean);
+    if (tokens.length === 0) return;
+
+    setLoading(true);
+    setError(null);
+
+    const collected: ClassEvent[] = [];
+    const errors: string[] = [];
+    for (const tok of tokens) {
+      try {
+        collected.push(...(await fetchCourseEvents(tok, semester)));
+      } catch (e: any) {
+        errors.push(e?.message ?? String(e));
+      }
+    }
+
+    if (collected.length > 0) {
+      setEvents((prev) => mergeEvents(prev, collected));
+    }
+    setError(errors.length > 0 ? errors.join(" · ") : null);
+    setLoading(false);
+  }
+
   const selectedEventsForCount = useMemo(
     () => events.filter((e) => selected.has(e.id)),
     [events, selected]
@@ -185,6 +232,9 @@ export default function App() {
         hoveredId={hoveredId}
         onHoverChange={setHoveredId}
         onImport={importCsv}
+        onAddCourses={addCourses}
+        semester={semester}
+        onSemesterChange={setSemester}
         loading={loading}
         error={error}
       />
