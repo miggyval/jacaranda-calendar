@@ -39,3 +39,9 @@ body {
   box-shadow: 0 0 0 2px rgba(255,255,255,0.22), 0 0 0 4px rgba(168,85,247,0.35);
   border-radius: 12px;
 }
+
+/* Segmented toggles + week buttons — robust active/inactive states (plain CSS, not purgeable) */
+.ctl-seg { color: rgba(255, 255, 255, 0.5); border-color: rgba(255, 255, 255, 0.1); }
+.ctl-seg:hover { color: rgba(255, 255, 255, 0.82); background: rgba(255, 255, 255, 0.06); }
+.ctl-on { background: rgba(255, 255, 255, 0.22); color: #ffffff; border-color: rgba(255, 255, 255, 0.32); }
+.ctl-on:hover { background: rgba(255, 255, 255, 0.26); }

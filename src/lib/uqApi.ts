@@ -1,6 +1,7 @@
 import type { ClassEvent, Day } from "./types";
 import { parseTimeToMinutes, formatMinutes } from "./time";
 import { semesterLabel, type SemesterSel } from "./semester";
+import { parseUqDate } from "./weeks";
 
 // Shape of UQ's public timetable JSON (POST /aplus/rest/timetable/subjects).
 export interface ApiActivity {
@@ -13,6 +14,10 @@ export interface ApiActivity {
   location: string; // "46-441/442/443 - Andrew N. Liveris Building"
   duration: string; // minutes, as a string
   activity_type?: string; // "Lecture", "Practical", "Recorded", ...
+  activitiesDays?: string[]; // real dates, "d/m/yyyy"
+  week_pattern?: string; // per-week 0/1 string
+  availability?: number; // remaining seats
+  selectable?: string; // "available", ...
   [k: string]: unknown;
 }
 
@@ -44,18 +49,37 @@ async function postSubjects(term: string): Promise<SubjectsResponse> {
     "&start-time=00%3A00&end-time=23%3A00";
   const headers = { "content-type": "application/x-www-form-urlencoded; charset=UTF-8" };
 
-  let res: Response;
-  if (runningInTauri()) {
-    // The Tauri HTTP plugin issues the request from Rust, bypassing browser CORS.
-    const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
-    res = await tauriFetch(`${UQ_BASE}${SUBJECTS_PATH}`, { method: "POST", headers, body });
-  } else {
-    // Browser dev (npm run dev): route through the Vite proxy (see vite.config.ts).
-    res = await window.fetch(`/uqapi${SUBJECTS_PATH}`, { method: "POST", headers, body });
-  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    let res: Response;
+    if (runningInTauri()) {
+      // The Tauri HTTP plugin issues the request from Rust, bypassing browser CORS.
+      const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
+      res = await tauriFetch(`${UQ_BASE}${SUBJECTS_PATH}`, {
+        method: "POST",
+        headers,
+        body,
+        signal: controller.signal,
+      });
+    } else {
+      // Browser dev (npm run dev): route through the Vite proxy (see vite.config.ts).
+      res = await window.fetch(`/uqapi${SUBJECTS_PATH}`, {
+        method: "POST",
+        headers,
+        body,
+        signal: controller.signal,
+      });
+    }
 
-  if (!res.ok) throw new Error(`UQ timetable request failed (HTTP ${res.status})`);
-  return (await res.json()) as SubjectsResponse;
+    if (!res.ok) throw new Error(`UQ timetable request failed (HTTP ${res.status})`);
+    return (await res.json()) as SubjectsResponse;
+  } catch (e: any) {
+    if (e?.name === "AbortError") throw new Error("UQ timetable request timed out — check your connection");
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 const DAYS: Record<string, Day> = {
@@ -73,7 +97,14 @@ function cleanLocation(loc: string): string {
   return (i >= 0 ? s.slice(0, i) : s).trim();
 }
 
-function activityToEvent(courseCode: string, a: ApiActivity): ClassEvent | null {
+// The building-name half of a UQ location string ("… - Andrew N. Liveris Building").
+function buildingFromLocation(loc: string): string | undefined {
+  const s = (loc ?? "").trim();
+  const i = s.indexOf(" - ");
+  return i >= 0 ? s.slice(i + 3).trim() || undefined : undefined;
+}
+
+function activityToEvent(courseCode: string, title: string | undefined, a: ApiActivity): ClassEvent | null {
   // Skip "Recorded"/delayed-viewing pseudo-classes — they duplicate the live lecture.
   if (a.activity_type === "Recorded") return null;
 
@@ -93,8 +124,14 @@ function activityToEvent(courseCode: string, a: ApiActivity): ClassEvent | null 
 
   const classCode = `${a.activity_group_code}-${a.activity_code}`;
   const location = cleanLocation(a.location);
+  const building = buildingFromLocation(a.location);
   // id must match parseClassesCsv's format so dedupe and saved state stay compatible.
   const id = `${courseCode}|${classCode}|${day}|${formatMinutes(startMin)}|${formatMinutes(endMin)}|${location}`;
+
+  const activeDates = (a.activitiesDays ?? [])
+    .map(parseUqDate)
+    .filter((d): d is string => d !== null)
+    .sort();
 
   return {
     id,
@@ -106,6 +143,11 @@ function activityToEvent(courseCode: string, a: ApiActivity): ClassEvent | null 
     location,
     enabled: 0,
     allocatedHours: (endMin - startMin) / 60,
+    ...(activeDates.length ? { activeDates } : {}),
+    ...(title ? { title } : {}),
+    ...(building ? { building } : {}),
+    ...(typeof a.availability === "number" ? { availability: a.availability } : {}),
+    ...(a.selectable ? { selectable: a.selectable } : {}),
   };
 }
 
@@ -185,7 +227,7 @@ export async function fetchCourseEvents(rawInput: string, sem: SemesterSel): Pro
   for (const [key, off] of chosen) {
     const course = offeringCourse(key, off);
     for (const a of Object.values(off.activities ?? {})) {
-      const ev = activityToEvent(course, a);
+      const ev = activityToEvent(course, off.description, a);
       if (ev && !seen.has(ev.id)) {
         seen.add(ev.id);
         out.push(ev);
@@ -196,4 +238,38 @@ export async function fetchCourseEvents(rawInput: string, sem: SemesterSel): Pro
     throw new Error(`No usable classes found for ${parsed.course}`);
   }
   return out;
+}
+
+export interface CourseMatch {
+  course: string;
+  title?: string;
+}
+
+// Live search for courses offered in the chosen semester (for the Add box autocomplete).
+// The UQ endpoint substring-matches code + title, so we de-dupe by course and rank code matches first.
+export async function searchCourses(term: string, sem: SemesterSel): Promise<CourseMatch[]> {
+  const q = (term ?? "").trim();
+  if (q.length < 3) return [];
+
+  const raw = await postSubjects(q);
+  const byCourse = new Map<string, CourseMatch>();
+  for (const [key, off] of Object.entries(raw)) {
+    const parts = key.split("_"); // [CALLISTA, S#, YEAR, CAMPUS, id, MODE]
+    const semCode = (off.semester ?? parts[1] ?? "").toUpperCase();
+    const year = Number(parts[2]);
+    if (semCode !== sem.code) continue;
+    if (sem.code !== "S3" && year !== sem.year) continue;
+    const course = offeringCourse(key, off);
+    if (course && !byCourse.has(course)) byCourse.set(course, { course, title: off.description });
+  }
+
+  const upper = q.toUpperCase();
+  return [...byCourse.values()]
+    .sort((a, b) => {
+      const ap = a.course.startsWith(upper) ? 0 : 1;
+      const bp = b.course.startsWith(upper) ? 0 : 1;
+      if (ap !== bp) return ap - bp;
+      return a.course.localeCompare(b.course);
+    })
+    .slice(0, 30);
 }

@@ -1,9 +1,11 @@
-import { useMemo, useRef, useState } from "react";
-import { Check, Download, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { Check, Download, X, Trash2, EyeOff } from "lucide-react";
 import clsx from "clsx";
 import { formatMinutes } from "../lib/time";
 import { listSemesters, semesterValue, parseSemesterValue, type SemesterSel } from "../lib/semester";
-import type { ClassEvent } from "../lib/types";
+import { searchCourses, type CourseMatch } from "../lib/uqApi";
+import type { ClassEvent, PlanMode, PlanMeta } from "../lib/types";
 
 type Props = {
   events: ClassEvent[];
@@ -14,12 +16,22 @@ type Props = {
   onSelectAll: () => void;
   onClear: () => void;
   onShowAll: () => void;
+  onRemoveCourse: (courseCode: string) => void;
   hoveredId: string | null;
   onHoverChange: (id: string | null) => void;
   onImport: (file: File) => void;
   onAddCourses: (input: string) => void;
   semester: SemesterSel;
   onSemesterChange: (s: SemesterSel) => void;
+  mode: PlanMode;
+  onModeChange: (m: PlanMode) => void;
+  ignoreClashes: boolean;
+  onIgnoreClashesChange: (v: boolean) => void;
+  plans: PlanMeta[];
+  currentPlanId: string | null;
+  onSavePlan: (name: string) => void;
+  onLoadPlan: (id: string) => void;
+  onDeletePlan: (id: string) => void;
   loading: boolean;
   error?: string | null;
   allocatedHours: number;
@@ -69,6 +81,37 @@ const DAY_ORDER: Record<string, number> = {
 };
 const dayIndex = (d: string) => DAY_ORDER[(d ?? "").trim().toUpperCase()] ?? 99;
 
+// Two-option segmented toggle (equal columns, so multiple stack into an aligned grid).
+function Seg({
+  value,
+  options,
+  onChange,
+}: {
+  value: string;
+  options: { v: string; label: string; title?: string }[];
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div
+      className="grid overflow-hidden rounded-lg border border-white/10"
+      style={{ gridTemplateColumns: "1fr 1fr" }}
+    >
+      {options.map((o) => (
+        <button
+          key={o.v}
+          type="button"
+          title={o.title}
+          onClick={() => onChange(o.v)}
+          className={clsx("text-center text-[11px] font-medium", value === o.v ? "ctl-on" : "ctl-seg")}
+          style={{ padding: "5px 8px" }}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function Sidebar({
   events,
   selected,
@@ -78,12 +121,22 @@ export function Sidebar({
   onSelectAll,
   onClear,
   onShowAll,
+  onRemoveCourse,
   hoveredId,
   onHoverChange,
   onImport,
   onAddCourses,
   semester,
   onSemesterChange,
+  mode,
+  onModeChange,
+  ignoreClashes,
+  onIgnoreClashesChange,
+  plans,
+  currentPlanId,
+  onSavePlan,
+  onLoadPlan,
+  onDeletePlan,
   loading,
   error,
   allocatedHours,
@@ -92,13 +145,76 @@ export function Sidebar({
   const [q, setQ] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("numeric");
   const [courseInput, setCourseInput] = useState("");
+  const [suggestions, setSuggestions] = useState<CourseMatch[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [showSuggest, setShowSuggest] = useState(false);
+  const [planName, setPlanName] = useState("");
+  const [confirmCourse, setConfirmCourse] = useState<string | null>(null);
+  const cancelRef = useRef<HTMLButtonElement | null>(null);
 
   function submitAddCourses() {
     const v = courseInput.trim();
     if (!v) return;
     onAddCourses(v);
     setCourseInput("");
+    setSuggestions([]);
+    setShowSuggest(false);
   }
+
+  function addAndReset(code: string) {
+    onAddCourses(code);
+    setCourseInput("");
+    setSuggestions([]);
+    setShowSuggest(false);
+  }
+
+  function handleSavePlan() {
+    const n = planName.trim();
+    if (!n) return;
+    onSavePlan(n);
+    setPlanName("");
+  }
+
+  // Debounced live course search (skips exact codes / links / multi-code input).
+  useEffect(() => {
+    const query = courseInput.trim();
+    if (query.length < 3 || /[\s,]/.test(query) || /_S\d_|subject_code=/i.test(query)) {
+      setSuggestions([]);
+      setSearching(false);
+      return;
+    }
+    let cancelled = false;
+    setSearching(true);
+    const t = setTimeout(async () => {
+      try {
+        const res = await searchCourses(query, semester);
+        if (!cancelled) setSuggestions(res);
+      } catch {
+        if (!cancelled) setSuggestions([]);
+      } finally {
+        if (!cancelled) setSearching(false);
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [courseInput, semester]);
+
+  // Remove-course confirmation dialog: focus Cancel (safe default), close on Escape.
+  useEffect(() => {
+    if (!confirmCourse) return;
+    cancelRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setConfirmCourse(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [confirmCourse]);
+
+  const removeCount = confirmCourse
+    ? events.filter((e) => e.courseCode === confirmCourse).length
+    : 0;
 
   const filtered = useMemo(() => {
     const query = q.trim().toLowerCase();
@@ -186,8 +302,7 @@ export function Sidebar({
               UQ Timetable Planner
             </div>
             <div className="mt-1 text-[11px] text-white/50">
-              {events.length} classes · {selected.size} selected · {allocatedHours} allocated hrs
-              {loading ? <span className="ml-2 animate-pulse text-white/45">Parsing…</span> : null}
+              {events.length} classes · {selected.size} selected · {allocatedHours} hrs
             </div>
           </div>
 
@@ -232,16 +347,43 @@ export function Sidebar({
             ))}
           </select>
 
-          <input
-            value={courseInput}
-            onChange={(e) => setCourseInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") submitAddCourses();
-            }}
-            placeholder="Add course code…"
-            disabled={loading}
-            className="selection-ring w-full rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-[12px] outline-none placeholder:text-white/35 disabled:opacity-40"
-          />
+          <div className="relative w-full">
+            <input
+              value={courseInput}
+              onChange={(e) => setCourseInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") submitAddCourses();
+                if (e.key === "Escape") setShowSuggest(false);
+              }}
+              onFocus={() => setShowSuggest(true)}
+              onBlur={() => setTimeout(() => setShowSuggest(false), 150)}
+              placeholder="Add or search course…"
+              disabled={loading}
+              className="selection-ring w-full rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-[12px] outline-none placeholder:text-white/35 disabled:opacity-40"
+            />
+
+            {showSuggest && (searching || suggestions.length > 0) ? (
+              <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-64 overflow-auto rounded-lg border border-white/10 bg-[#0b0f14] shadow-[0_18px_40px_rgba(0,0,0,0.5)]">
+                {searching && suggestions.length === 0 ? (
+                  <div className="px-3 py-2 text-[11px] text-white/45">Searching…</div>
+                ) : null}
+                {suggestions.map((s) => (
+                  <button
+                    key={s.course}
+                    type="button"
+                    onMouseDown={(ev) => ev.preventDefault()}
+                    onClick={() => addAndReset(s.course)}
+                    className="flex w-full items-baseline px-3 py-1.5 text-left hover:bg-white/10"
+                  >
+                    <span className="shrink-0 text-[12px] font-semibold text-white/85">{s.course}:</span>
+                    <span className="truncate text-[11px] text-white/55" style={{ marginLeft: 6 }}>
+                      {s.title}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
 
           <button
             onClick={submitAddCourses}
@@ -291,36 +433,90 @@ export function Sidebar({
           </button>
         </div>
 
-        {/* Sort toggle */}
-        <div className="mt-2 flex items-center justify-between gap-2">
-          <div className="text-[11px] text-white/45">Sort</div>
+        {/* Mode / Clashes / Sort — aligned label + 2-option grid */}
+        <div
+          className="mt-2 grid items-center"
+          style={{ gridTemplateColumns: "1fr 156px", columnGap: 8, rowGap: 6 }}
+        >
+          <div className="text-[11px] text-white/45">Mode</div>
+          <Seg
+            value={mode}
+            onChange={(v) => onModeChange(v as PlanMode)}
+            options={[
+              { v: "student", label: "Student", title: "One class per activity group (e.g. a single practical)" },
+              { v: "staff", label: "Staff", title: "Select multiple classes, clashes allowed" },
+            ]}
+          />
 
-          <div className="inline-flex overflow-hidden rounded-lg border border-white/10 bg-white/5">
+          <div className="text-[11px] text-white/45">Clashes</div>
+          <Seg
+            value={ignoreClashes ? "ignore" : "warn"}
+            onChange={(v) => onIgnoreClashesChange(v === "ignore")}
+            options={[
+              { v: "warn", label: "Warn", title: "Highlight overlapping selected classes" },
+              { v: "ignore", label: "Ignore", title: "Ignore all clashes (no warnings)" },
+            ]}
+          />
+
+          <div className="text-[11px] text-white/45">Sort</div>
+          <Seg
+            value={sortMode}
+            onChange={(v) => setSortMode(v as SortMode)}
+            options={[
+              { v: "numeric", label: "Numeric", title: "Course → Type/Stream → Number" },
+              { v: "chrono", label: "Chrono", title: "Day → Start time" },
+            ]}
+          />
+        </div>
+
+        {/* Saved plans */}
+        <div className="mt-2 space-y-2">
+          <div className="flex items-center gap-2">
+            <div className="shrink-0 text-[11px] text-white/45">Plans</div>
+            <select
+              value={currentPlanId ?? ""}
+              onChange={(e) => {
+                if (e.target.value) onLoadPlan(e.target.value);
+              }}
+              className="selection-ring min-w-0 flex-1 rounded-lg border border-white/10 bg-black/25 px-2 py-1.5 text-[11px] text-white/80 outline-none"
+              title="Load a saved plan"
+            >
+              <option value="">{plans.length ? "Load plan…" : "No saved plans"}</option>
+              {plans.map((p) => (
+                <option key={p.id} value={p.id} className="bg-[#0b0f14]">
+                  {p.name}
+                </option>
+              ))}
+            </select>
             <button
               type="button"
-              onClick={() => setSortMode("numeric")}
-              className={clsx(
-                "px-3 py-1.5 text-[11px] font-medium",
-                sortMode === "numeric"
-                  ? "bg-white/10 text-white/85"
-                  : "text-white/60 hover:bg-white/5"
-              )}
-              title="Course → Type/Stream → Number"
+              onClick={() => currentPlanId && onDeletePlan(currentPlanId)}
+              disabled={!currentPlanId}
+              className="selection-ring shrink-0 rounded-lg border border-white/10 bg-white/5 p-1.5 text-white/80 hover:bg-white/10 disabled:opacity-30"
+              title="Delete selected plan"
+              aria-label="Delete selected plan"
             >
-              Numeric
+              <Trash2 className="h-4 w-4" />
             </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              value={planName}
+              onChange={(e) => setPlanName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleSavePlan();
+              }}
+              placeholder="Name this plan…"
+              className="selection-ring w-full rounded-lg border border-white/10 bg-black/25 px-3 py-1.5 text-[11px] outline-none placeholder:text-white/35"
+            />
             <button
               type="button"
-              onClick={() => setSortMode("chrono")}
-              className={clsx(
-                "px-3 py-1.5 text-[11px] font-medium",
-                sortMode === "chrono"
-                  ? "bg-white/10 text-white/85"
-                  : "text-white/60 hover:bg-white/5"
-              )}
-              title="Day → Start time"
+              onClick={handleSavePlan}
+              disabled={!planName.trim() || events.length === 0}
+              className="selection-ring shrink-0 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] font-medium text-white/80 hover:bg-white/10 disabled:opacity-30"
+              title="Save current timetable as a plan"
             >
-              Chrono
+              Save
             </button>
           </div>
         </div>
@@ -334,21 +530,45 @@ export function Sidebar({
 
       <div className="h-[calc(100vh-140px)] overflow-auto px-3 pb-4">
         <div className="rounded-2xl border border-white/10 bg-white/5">
-          <div className="sticky top-0 z-10 grid grid-cols-[22px_22px_86px_96px_44px_92px_1fr] gap-2 border-b border-white/10 bg-[#0b0f14]/95 px-3 py-2 text-[11px] font-semibold text-white/50 backdrop-blur">
-            <div>On</div>
-            <div>Hide</div>
-            <div>Course</div>
+          <div
+            className="sticky top-0 z-10 grid gap-2 border-b border-white/10 bg-[#0b0f14]/95 px-3 py-2 text-[11px] font-semibold text-white/50 backdrop-blur"
+            style={{ gridTemplateColumns: "20px 74px 30px 78px minmax(0,1fr) auto 20px" }}
+          >
+            <div />
             <div>Class</div>
             <div>Day</div>
             <div>Time</div>
             <div>Location</div>
+            <div />
+            <div />
           </div>
 
           <div className="divide-y divide-white/10">
             {grouped.map((group) => (
               <div key={group.courseCode}>
-                <div className="px-3 py-2 text-[13px] font-extrabold tracking-wide text-white/85">
-                  {group.courseCode}
+                <div className="flex items-center justify-between gap-2 px-3 py-2">
+                  <div className="flex min-w-0 items-baseline text-[13px] font-extrabold tracking-wide text-white/85">
+                    <span className="shrink-0">{group.courseCode}:</span>
+                    {group.items[0]?.title ? (
+                      <span
+                        className="truncate text-[11px] font-normal text-white/45"
+                        style={{ marginLeft: 6 }}
+                      >
+                        {group.items[0].title}
+                      </span>
+                    ) : null}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmCourse(group.courseCode)}
+                    className="shrink-0 rounded-md p-1 text-white/40 transition hover:bg-white/10"
+                    title={`Remove ${group.courseCode}`}
+                    aria-label={`Remove ${group.courseCode}`}
+                    onMouseEnter={(e) => (e.currentTarget.style.color = "#f87171")}
+                    onMouseLeave={(e) => (e.currentTarget.style.color = "")}
+                  >
+                    <Trash2 size={16} />
+                  </button>
                 </div>
 
                 {group.items.map((e) => {
@@ -361,15 +581,16 @@ export function Sidebar({
                       key={e.id}
                       onMouseEnter={() => onHoverChange(e.id)}
                       onMouseLeave={() => onHoverChange(null)}
+                      style={{ gridTemplateColumns: "20px 74px 30px 78px minmax(0,1fr) auto 20px" }}
                       className={clsx(
-                        "grid grid-cols-[22px_22px_86px_96px_44px_92px_1fr] gap-2 px-3 py-2 text-[11px]",
+                        "group grid items-center gap-2 px-3 py-2 text-[11px]",
                         "hover:bg-white/5 hover:font-bold",
                         isHovered && "bg-white/5 font-bold",
                         isOn ? "text-white/90" : "text-white/55",
                         isHidden && "opacity-60"
                       )}
                     >
-                      <div className="pt-[2px]">
+                      <div>
                         <input
                           type="checkbox"
                           checked={isOn}
@@ -379,24 +600,41 @@ export function Sidebar({
                         />
                       </div>
 
-                      <div className="pt-[2px]">
-                        <input
-                          type="checkbox"
-                          checked={isHidden}
-                          onChange={() => onToggleHidden(e.id)}
-                          className="h-4 w-4 accent-purple-400"
-                          aria-label={`Hide ${e.courseCode} ${e.classCode}`}
-                          title="Hide"
-                        />
-                      </div>
-
-                      <div className="truncate font-semibold">{e.courseCode}</div>
                       <div className="truncate">{e.classCode}</div>
                       <div className="truncate font-medium">{e.day}</div>
                       <div className="truncate tabular-nums font-mono">
                         {formatMinutes(e.startMin)}–{formatMinutes(e.endMin)}
                       </div>
-                      <div className="truncate">{e.location}</div>
+                      <div className="min-w-0 truncate">{e.location}</div>
+
+                      <div>
+                        {e.availability !== undefined && e.availability <= 0 ? (
+                          <span
+                            className="rounded px-1 text-[10px] font-semibold text-red-200"
+                            style={{ backgroundColor: "rgba(239,68,68,0.18)", marginRight: 16 }}
+                            title="No places available"
+                          >
+                            Full
+                          </span>
+                        ) : null}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => onToggleHidden(e.id)}
+                        title={isHidden ? "Show" : "Hide"}
+                        aria-label={isHidden ? `Show ${e.classCode}` : `Hide ${e.classCode}`}
+                        className={clsx(
+                          "rounded p-0.5 transition-opacity",
+                          isHidden ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                        )}
+                        style={{
+                          justifySelf: "end",
+                          color: isHidden ? "#c084fc" : "rgba(255,255,255,0.5)",
+                        }}
+                      >
+                        <EyeOff size={16} />
+                      </button>
                     </div>
                   );
                 })}
@@ -409,6 +647,72 @@ export function Sidebar({
           </div>
         </div>
       </div>
+
+      {confirmCourse
+        ? createPortal(
+            <div
+              className="fixed z-[100] flex items-center justify-center"
+              style={{
+                inset: 0,
+                padding: "1rem",
+                background: "rgba(0,0,0,0.6)",
+                backdropFilter: "blur(2px)",
+                WebkitBackdropFilter: "blur(2px)",
+              }}
+              onClick={() => setConfirmCourse(null)}
+            >
+              <div
+                role="dialog"
+                aria-modal="true"
+                className="border border-white/10 bg-[#0b0f14]"
+                style={{
+                  width: 360,
+                  maxWidth: "90vw",
+                  borderRadius: 16,
+                  padding: 20,
+                  boxShadow: "0 24px 80px rgba(0,0,0,0.6)",
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="text-white/90" style={{ fontSize: 14, fontWeight: 600 }}>
+                  Remove {confirmCourse}?
+                </div>
+                <div className="text-white/55" style={{ marginTop: 8, fontSize: 12, lineHeight: 1.5 }}>
+                  This removes all {removeCount} {removeCount === 1 ? "class" : "classes"} for{" "}
+                  <span className="text-white/80" style={{ fontWeight: 500 }}>
+                    {confirmCourse}
+                  </span>{" "}
+                  from your timetable. Saved plans aren’t affected.
+                </div>
+                <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                  <button
+                    type="button"
+                    ref={cancelRef}
+                    onClick={() => setConfirmCourse(null)}
+                    className="selection-ring border border-white/10 bg-white/5 text-white/80 hover:bg-white/10"
+                    style={{ borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 500 }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onRemoveCourse(confirmCourse);
+                      setConfirmCourse(null);
+                    }}
+                    className="selection-ring text-white"
+                    style={{ borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 600, backgroundColor: "#dc2626" }}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "#ef4444")}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "#dc2626")}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
     </aside>
   );
 }

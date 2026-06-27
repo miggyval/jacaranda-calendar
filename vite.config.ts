@@ -5,6 +5,8 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
+    // Honour PORT when set (e.g. preview tooling) so it can run alongside `tauri dev`.
+    port: Number(process.env.PORT) || 5173,
     // Dev-only: lets `npm run dev` (plain browser) reach UQ's timetable without CORS.
     // The packaged Tauri app fetches natively via the HTTP plugin instead.
     proxy: {

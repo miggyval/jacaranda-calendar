@@ -1,18 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toPng } from "html-to-image";
-import { X, Upload, Plus } from "lucide-react";
+import { X, Upload, Plus, AlertTriangle, Bell, BellOff, ArrowLeftRight } from "lucide-react";
 import clsx from "clsx";
 import { daysInData, layoutEventsByDay } from "../lib/layout";
 import { formatMinutes } from "../lib/time";
 import { courseToColor, hexToRgba } from "../lib/colors";
-import type { ClassEvent, PositionedEvent } from "../lib/types";
+import {
+  clashingIds,
+  deriveWeeks,
+  eventActiveInWeek,
+  groupKeyOf,
+  isCurrentWeek,
+  weekRangeLabel,
+} from "../lib/weeks";
+import { semesterDates, type SemesterSel } from "../lib/semester";
+import type { ClassEvent, PlanMode, PositionedEvent } from "../lib/types";
 import JSZip from "jszip";
 
 const ICS_TZID = "Australia/Brisbane";
-
-// Pick the Monday of the week you want the export to represent.
-// Change this to whatever week you want (YYYY-MM-DD).
-const EXPORT_WEEK_START = "2026-02-23"; // Monday
 
 function pad2(n: number) {
   return String(n).padStart(2, "0");
@@ -21,9 +26,6 @@ function pad2(n: number) {
 function safeFilename(s: string) {
   return s.replace(/[^a-z0-9._-]+/gi, "_");
 }
-
-
-
 
 function escapeIcsText(s: string) {
   // iCal requires escaping backslashes, commas, semicolons, and newlines
@@ -81,41 +83,23 @@ function downloadTextFile(filename: string, text: string, mime = "text/calendar;
   a.click();
   URL.revokeObjectURL(url);
 }
-function buildIcsForEvents(events: ClassEvent[], weekStartYmd: string) {
-  const weekStart = ymdToDateLocal(weekStartYmd);
 
-  const now = new Date();
-  const dtstamp = icsLocalDateTime(now);
-
-  // Sem 1 ends 20 June (inclusive) — stop recurrences at end of that day.
-  // IMPORTANT: For best compatibility, RRULE UNTIL should be UTC and end with "Z".
-  const semEndLocal = ymdToDateLocal("2026-06-20");
-  semEndLocal.setHours(23, 59, 59, 0);
-  const untilUtcZ = icsUtcDateTimeZ(semEndLocal);
-
-  function dayToByday(d: string) {
-    switch (d) {
-      case "MON": return "MO";
-      case "TUE": return "TU";
-      case "WED": return "WE";
-      case "THU": return "TH";
-      case "FRI": return "FR";
-      case "SAT": return "SA";
-      case "SUN": return "SU";
-      default: return "MO";
-    }
+// Weekly occurrences across the semester for events with no real dates (CSV imports).
+function fallbackWeeklyDates(e: ClassEvent, semester: SemesterSel): string[] {
+  const { firstMonday, endISO } = semesterDates(semester);
+  const cur = ymdToDateLocal(firstMonday);
+  cur.setDate(cur.getDate() + dayToOffset(e.day));
+  const end = ymdToDateLocal(endISO);
+  const out: string[] = [];
+  while (cur <= end) {
+    out.push(`${cur.getFullYear()}-${pad2(cur.getMonth() + 1)}-${pad2(cur.getDate())}`);
+    cur.setDate(cur.getDate() + 7);
   }
+  return out;
+}
 
-  function icsUtcDateTimeZ(dt: Date) {
-    // YYYYMMDDTHHMMSSZ (UTC)
-    const y = dt.getUTCFullYear();
-    const m = pad2(dt.getUTCMonth() + 1);
-    const d = pad2(dt.getUTCDate());
-    const hh = pad2(dt.getUTCHours());
-    const mm = pad2(dt.getUTCMinutes());
-    const ss = pad2(dt.getUTCSeconds());
-    return `${y}${m}${d}T${hh}${mm}${ss}Z`;
-  }
+function buildIcsForEvents(events: ClassEvent[], semester: SemesterSel) {
+  const dtstamp = icsLocalDateTime(new Date());
 
   const lines: string[] = [];
   lines.push("BEGIN:VCALENDAR");
@@ -124,25 +108,23 @@ function buildIcsForEvents(events: ClassEvent[], weekStartYmd: string) {
   lines.push("CALSCALE:GREGORIAN");
 
   for (const e of events) {
-    const dayOffset = dayToOffset(e.day);
-    const dayDate = new Date(weekStart);
-    dayDate.setDate(weekStart.getDate() + dayOffset);
+    // Scraped classes carry their real dates; CSV imports fall back to weekly across the semester.
+    const dates =
+      e.activeDates && e.activeDates.length ? [...e.activeDates].sort() : fallbackWeeklyDates(e, semester);
+    if (dates.length === 0) continue;
 
-    const startDt = dateWithMinutes(dayDate, e.startMin);
-    const endDt = dateWithMinutes(dayDate, e.endMin);
+    const startDt = dateWithMinutes(ymdToDateLocal(dates[0]), e.startMin);
+    const endDt = dateWithMinutes(ymdToDateLocal(dates[0]), e.endMin);
 
-    // Stable UID so re-imports update the same recurring series (less duplication).
+    // Stable UID so re-imports update the same series (less duplication).
     const uid = `${e.id}@uqtimetable`;
-
-    const summary = `${e.courseCode} ${e.classCode}`;
-
-    // Use REAL newlines here; escapeIcsText() will convert them to "\n" for iCal.
+    const summary = e.title
+      ? `${e.courseCode} ${e.classCode} — ${e.title}`
+      : `${e.courseCode} ${e.classCode}`;
     const description =
       `${e.courseCode} ${e.classCode}\n` +
       `${formatMinutes(e.startMin)}–${formatMinutes(e.endMin)}\n` +
       `${e.location}`;
-
-    const byday = dayToByday(e.day);
 
     lines.push("BEGIN:VEVENT");
     lines.push(`UID:${escapeIcsText(uid)}`);
@@ -150,13 +132,16 @@ function buildIcsForEvents(events: ClassEvent[], weekStartYmd: string) {
     lines.push(`SUMMARY:${escapeIcsText(summary)}`);
     lines.push(`LOCATION:${escapeIcsText(e.location)}`);
     lines.push(`DESCRIPTION:${escapeIcsText(description)}`);
-
-    // First occurrence is anchored to EXPORT_WEEK_START (weekStartYmd).
     lines.push(`DTSTART;TZID=${ICS_TZID}:${icsLocalDateTime(startDt)}`);
     lines.push(`DTEND;TZID=${ICS_TZID}:${icsLocalDateTime(endDt)}`);
 
-    // Weekly recurrence, ending at Sem 1 end date (UTC UNTIL for compatibility).
-    lines.push(`RRULE:FREQ=WEEKLY;BYDAY=${byday};WKST=MO;UNTIL=${untilUtcZ}`);
+    // Exact occurrences — DTSTART is the first, RDATE adds the rest. Handles mid-sem breaks.
+    if (dates.length > 1) {
+      const rdates = dates
+        .slice(1)
+        .map((iso) => icsLocalDateTime(dateWithMinutes(ymdToDateLocal(iso), e.startMin)));
+      lines.push(`RDATE;TZID=${ICS_TZID}:${rdates.join(",")}`);
+    }
 
     lines.push("END:VEVENT");
   }
@@ -175,6 +160,11 @@ type Props = {
   hoveredId: string | null;
   onHoverChange: (id: string | null) => void;
   onDeselect: (id: string) => void;
+  semester: SemesterSel;
+  mode: PlanMode;
+  ignoreClashes: boolean;
+  clashIgnored: Set<string>;
+  onToggleClashIgnore: (id: string) => void;
 
   previewGroupKey: string | null;
   onPreviewGroupKeyChange: (key: string | null) => void;
@@ -184,14 +174,6 @@ const PX_PER_MIN = 1.2; // 72px per hour
 const GRID_PAD_TOP = 10; // px
 const GRID_PAD_BOTTOM = 10; // px
 
-function classTypeFromClassCode(classCode: string) {
-  return classCode.split("-")[0] ?? classCode;
-}
-
-function makeGroupKey(e: ClassEvent) {
-  return `${e.courseCode}::${classTypeFromClassCode(e.classCode)}`;
-}
-
 export function Timetable({
   events,
   selected,
@@ -199,6 +181,11 @@ export function Timetable({
   hoveredId,
   onHoverChange,
   onDeselect,
+  semester,
+  mode,
+  ignoreClashes,
+  clashIgnored,
+  onToggleClashIgnore,
   previewGroupKey,
   onPreviewGroupKeyChange,
 }: Props) {
@@ -219,23 +206,25 @@ export function Timetable({
     [events, hoveredId]
   );
 
-  function exportIcalPerCourse() {
-    // selectedEvents is already "selected AND not hidden" in your code
-    const byCourse = new Map<string, ClassEvent[]>();
+  // Raw overlaps (no ignores) + the effective set after the global and per-class ignores.
+  const rawClashing = useMemo(() => clashingIds(selectedEvents), [selectedEvents]);
+  const clashing = useMemo(
+    () => (ignoreClashes ? new Set<string>() : clashingIds(selectedEvents, clashIgnored)),
+    [selectedEvents, ignoreClashes, clashIgnored]
+  );
+  // Cards shown with the "ignored" treatment: actually overlapping, per-class-ignored, warnings on.
+  const clashIgnoredVisible = useMemo(() => {
+    if (ignoreClashes) return new Set<string>();
+    const s = new Set<string>();
+    for (const id of clashIgnored) if (rawClashing.has(id)) s.add(id);
+    return s;
+  }, [clashIgnored, rawClashing, ignoreClashes]);
 
-    for (const e of selectedEvents) {
-      const key = e.courseCode;
-      const arr = byCourse.get(key) ?? [];
-      arr.push(e);
-      byCourse.set(key, arr);
-    }
-
-    for (const [courseCode, evs] of byCourse) {
-      const ics = buildIcsForEvents(evs, EXPORT_WEEK_START);
-      downloadTextFile(`${safeFilename(courseCode)}.ics`, ics);
-    }
-  }
-
+  // Week selector (view-only filter), derived from the selected classes' real dates.
+  const weeks = useMemo(() => deriveWeeks(selectedEvents), [selectedEvents]);
+  const [selectedWeek, setSelectedWeek] = useState<string | null>(null);
+  const activeWeek =
+    selectedWeek && weeks.some((w) => w.weekStartISO === selectedWeek) ? selectedWeek : null;
 
   // hover-preview (sidebar hover over non-selected)
   const previewId =
@@ -249,7 +238,7 @@ export function Timetable({
     return events.filter((e) => {
       if (hidden.has(e.id)) return false;
       if (visibleSelected.has(e.id)) return false;
-      return makeGroupKey(e) === previewGroupKey;
+      return groupKeyOf(e) === previewGroupKey;
     });
   }, [events, previewGroupKey, hidden, visibleSelected]);
 
@@ -264,12 +253,17 @@ export function Timetable({
     return [...base, hoveredEvent];
   }, [selectedEvents, previewGroupEvents, hoveredEvent, hidden]);
 
-  const captureRef = useRef<HTMLDivElement | null>(null);
+  // Apply the week filter (if a specific week is chosen) to what gets laid out.
+  const layoutEvents = useMemo(
+    () => (activeWeek ? eventsForLayout.filter((e) => eventActiveInWeek(e, activeWeek)) : eventsForLayout),
+    [eventsForLayout, activeWeek]
+  );
 
+  const captureRef = useRef<HTMLDivElement | null>(null);
 
   function exportIcal() {
     // Export only the selected (and not hidden) events.
-    const ics = buildIcsForEvents(selectedEvents, EXPORT_WEEK_START);
+    const ics = buildIcsForEvents(selectedEvents, semester);
     downloadTextFile("timetable.ics", ics);
   }
 
@@ -288,7 +282,7 @@ export function Timetable({
     const folder = zip.folder("iCal_by_course")!;
 
     for (const [courseCode, evs] of byCourse) {
-      const ics = buildIcsForEvents(evs, EXPORT_WEEK_START);
+      const ics = buildIcsForEvents(evs, semester);
 
       // .ics files are just UTF-8 text
       folder.file(`${safeFilename(courseCode)}.ics`, ics);
@@ -300,7 +294,7 @@ export function Timetable({
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `timetables_by_course_${EXPORT_WEEK_START}.zip`;
+    a.download = `timetables_${semester.code}_${semester.year}.zip`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -319,7 +313,7 @@ export function Timetable({
   }
 
   const days = daysInData(events);
-  const byDay = layoutEventsByDay(eventsForLayout);
+  const byDay = layoutEventsByDay(layoutEvents);
 
   const start = 8 * 60;
   const end = 20 * 60;
@@ -330,23 +324,28 @@ export function Timetable({
   for (let t = start; t <= end; t += 60) hours.push(t);
 
   return (
-    <div className="flex-1 overflow-auto">
+    <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 overflow-auto">
       <div className="min-w-[900px] p-5">
         <div className="mb-3 flex items-center justify-between gap-3">
-          <div className="text-sm font-semibold text-white/80">Timetable</div>
+          <div className="flex items-center gap-2">
+            <div className="text-sm font-semibold text-white/80">Timetable</div>
+            {clashing.size > 0 ? (
+              <span
+                className="inline-flex items-center gap-1 rounded-md border border-red-500/30 bg-red-500/10 px-2 py-0.5 text-[11px] font-medium text-red-200"
+                title="Selected classes that overlap"
+              >
+                <AlertTriangle className="h-3 w-3" />
+                {clashing.size} clashing
+              </span>
+            ) : null}
+          </div>
 
           <div className="flex items-center gap-3">
             <button
               className="selection-ring rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[12px] font-medium text-white/80 hover:bg-white/10"
               onClick={exportIcalZipPerCourse}
-              title="Export one .ics per course"
-            >
-              iCal (per course)
-            </button>
-            <button
-              className="selection-ring rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[12px] font-medium text-white/80 hover:bg-white/10"
-              onClick={exportIcalPerCourse}
-              title="Export one .ics per course"
+              title="Export one .ics per course (zipped)"
             >
               iCal (per course)
             </button>
@@ -356,13 +355,13 @@ export function Timetable({
               onClick={exportIcal}
               title="Export iCal"
             >
-              {/* reuse an icon if you want; or just text */}
               iCal
             </button>
 
             <button
               className="selection-ring rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[12px] font-medium text-white/80 hover:bg-white/10"
               onClick={exportPng}
+              title="Export PNG"
             >
               <Upload className="h-4 w-4" />
             </button>
@@ -424,11 +423,69 @@ export function Timetable({
                 previewGroupKey={previewGroupKey}
                 onPreviewGroupKeyChange={onPreviewGroupKeyChange}
                 enabledIds={visibleSelected}
+                clashingIds={clashing}
+                clashIgnoredIds={clashIgnoredVisible}
+                onToggleClashIgnore={onToggleClashIgnore}
+                mode={mode}
               />
             ))}
           </div>
         </div>
+
       </div>
+      </div>
+
+      {/* Week selector — sticky footer; filters the view to a single teaching week */}
+      {weeks.length > 0 ? (
+        <div className="shrink-0 border-t border-white/10 bg-[#0b0f14]/70 px-5 py-3 backdrop-blur-xl">
+          <div className="flex items-center gap-3">
+            <span className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.08em] text-white/40">
+              Week
+            </span>
+
+            <div className="flex min-w-0 flex-1 items-center justify-center gap-1.5 overflow-x-auto pb-1">
+              <button
+                type="button"
+                onClick={() => setSelectedWeek(null)}
+                className={clsx(
+                  "shrink-0 rounded-full text-[12px] font-medium",
+                  activeWeek === null ? "ctl-on" : "ctl-seg"
+                )}
+                style={{ padding: "5px 14px" }}
+              >
+                All
+              </button>
+              {weeks.map((w) => {
+                const isActive = activeWeek === w.weekStartISO;
+                const current = isCurrentWeek(w.weekStartISO);
+                return (
+                  <button
+                    key={w.weekStartISO}
+                    type="button"
+                    onClick={() => setSelectedWeek(w.weekStartISO)}
+                    title={`Week ${w.index} · ${weekRangeLabel(w.weekStartISO)}`}
+                    className={clsx(
+                      "shrink-0 rounded-full text-center text-[12px] font-medium tabular-nums",
+                      isActive ? "ctl-on" : "ctl-seg"
+                    )}
+                    style={{
+                      minWidth: 32,
+                      padding: "5px 8px",
+                      ...(current && !isActive ? { color: "#7dd3fc" } : {}),
+                    }}
+                  >
+                    {w.index}
+                  </button>
+                );
+              })}
+            </div>
+
+            <span className="ml-auto shrink-0 text-[12px] tabular-nums text-white/45">
+              {activeWeek ? weekRangeLabel(activeWeek) : "All weeks"}
+            </span>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -444,6 +501,10 @@ function DayColumn({
   previewGroupKey,
   onPreviewGroupKeyChange,
   enabledIds,
+  clashingIds,
+  clashIgnoredIds,
+  onToggleClashIgnore,
+  mode,
 }: {
   events: PositionedEvent[];
   start: number;
@@ -457,6 +518,10 @@ function DayColumn({
   onPreviewGroupKeyChange: (key: string | null) => void;
 
   enabledIds: Set<string>;
+  clashingIds: Set<string>;
+  clashIgnoredIds: Set<string>;
+  onToggleClashIgnore: (id: string) => void;
+  mode: PlanMode;
 }) {
   const end = 20 * 60;
 
@@ -521,6 +586,10 @@ function DayColumn({
           previewGroupKey={previewGroupKey}
           onPreviewGroupKeyChange={onPreviewGroupKeyChange}
           isEnabled={enabledIds.has(e.id)}
+          isClashing={clashingIds.has(e.id)}
+          isClashIgnored={clashIgnoredIds.has(e.id)}
+          onToggleClashIgnore={onToggleClashIgnore}
+          mode={mode}
         />
       ))}
     </div>
@@ -538,6 +607,10 @@ function EventCard({
   previewGroupKey,
   onPreviewGroupKeyChange,
   isEnabled,
+  isClashing,
+  isClashIgnored,
+  onToggleClashIgnore,
+  mode,
 }: {
   e: PositionedEvent;
   start: number;
@@ -550,6 +623,10 @@ function EventCard({
   onPreviewGroupKeyChange: (key: string | null) => void;
 
   isEnabled: boolean;
+  isClashing: boolean;
+  isClashIgnored: boolean;
+  onToggleClashIgnore: (id: string) => void;
+  mode: PlanMode;
 }) {
   const V_GAP = 8;
 
@@ -569,7 +646,7 @@ function EventCard({
 
   const isHovered = hoveredId === e.id;
 
-  const groupKey = `${e.courseCode}::${classTypeFromClassCode(e.classCode)}`;
+  const groupKey = groupKeyOf(e);
   const isGroupActive = previewGroupKey === groupKey;
 
   const isHoverPreview = previewId === e.id;
@@ -581,7 +658,7 @@ function EventCard({
   const bgAlpha = isGroupPreview ? 0.40 : isHoverPreview ? 0.80 : 0.75;
   const bg = hexToRgba(accent, bgAlpha);
   const border = hexToRgba(accent, isHovered || isGroupHighlight ? 0.2 : 0.8);
-  
+
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -619,6 +696,11 @@ function EventCard({
         backgroundColor: bg,
         borderColor: border,
         borderStyle: isHoverPreview || isGroupPreview ? "dashed" : "solid",
+        boxShadow: isClashing
+          ? "0 0 0 2px rgba(248,113,113,0.95)"
+          : isClashIgnored
+          ? "0 0 0 2px rgba(251,191,36,0.85)"
+          : undefined,
         cursor: "pointer",
       }}
     >
@@ -637,17 +719,41 @@ function EventCard({
           ev.stopPropagation();
           onDeselect(e.id);
         }}
-        title={!isEnabled ? "Add" : "Remove"}
-        aria-label={!isEnabled ? "Add" : "Remove"}
+        title={isEnabled ? "Remove" : mode === "student" ? "Swap" : "Add"}
+        aria-label={isEnabled ? "Remove" : mode === "student" ? "Swap" : "Add"}
       >
-        {!isEnabled ? (
-          <Plus className="h-[14px] w-[17px] translate-y-[1.5px]" strokeWidth={1.8} />
-        ) : (
+        {isEnabled ? (
           <X className="h-[14px] w-[17px] translate-y-[1.5px]" strokeWidth={1.8} />
+        ) : mode === "student" ? (
+          <ArrowLeftRight className="h-[14px] w-[17px] translate-y-[1.5px]" strokeWidth={1.8} />
+        ) : (
+          <Plus className="h-[14px] w-[17px] translate-y-[1.5px]" strokeWidth={1.8} />
         )}
       </button>
 
-      <div className="min-w-0 pl-2 pr-6 relative">
+      {isClashing || isClashIgnored ? (
+        <button
+          className="absolute z-10 rounded-[8px] border border-white/15 bg-white/10 p-[2px] shadow-[0_8px_18px_rgba(0,0,0,0.25)] backdrop-blur-xl hover:bg-white/15 active:bg-white/20"
+          style={{ top: 2, left: 2 }}
+          onClick={(ev) => {
+            ev.stopPropagation();
+            onToggleClashIgnore(e.id);
+          }}
+          title={isClashIgnored ? "Clashes ignored — click to restore the warning" : "Ignore clashes for this class"}
+          aria-label={isClashIgnored ? "Restore clash warning" : "Ignore clashes for this class"}
+        >
+          {isClashIgnored ? (
+            <BellOff className="h-[14px] w-[14px]" strokeWidth={1.8} style={{ color: "#fbbf24" }} />
+          ) : (
+            <Bell className="h-[14px] w-[14px]" strokeWidth={1.8} style={{ color: "#fca5a5" }} />
+          )}
+        </button>
+      ) : null}
+
+      <div
+        className="min-w-0 pr-6 relative"
+        style={{ paddingLeft: isClashing || isClashIgnored ? 26 : 8 }}
+      >
         <div
           className="truncate text-[12px] leading-4"
           style={{ fontWeight: isHovered || isGroupHighlight ? 800 : 600 }}
@@ -667,6 +773,9 @@ function EventCard({
               {formatMinutes(e.startMin)}–{formatMinutes(e.endMin)}
             </div>
             <div className="mt-1 truncate text-[11px] text-white/65">{e.location}</div>
+            {e.building ? (
+              <div className="truncate text-[10px] leading-tight text-white/45">{e.building}</div>
+            ) : null}
           </>
         )}
       </div>

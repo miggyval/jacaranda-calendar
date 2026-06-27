@@ -50,6 +50,26 @@ export function listSemesters(now: Date = new Date()): { sel: SemesterSel; label
   return sels.map((sel) => ({ sel, label: semesterLabel(sel) }));
 }
 
+// Approximate UQ teaching window for a semester — only a FALLBACK for CSV imports
+// (scraped classes carry their real per-class dates). Returns ISO dates.
+export function semesterDates(s: SemesterSel): { firstMonday: string; endISO: string } {
+  // [month index (0-based), day] anchors, advanced to the next Monday.
+  const anchor: Record<SemesterCode, [number, number]> = {
+    S1: [1, 22], // ~22 Feb
+    S2: [6, 20], // ~20 Jul
+    S3: [10, 25], // ~25 Nov (Summer)
+  };
+  const [mo, day] = anchor[s.code];
+  const start = new Date(s.year, mo, day);
+  const dow = (start.getDay() + 6) % 7;
+  if (dow !== 0) start.setDate(start.getDate() + (7 - dow)); // forward to Monday
+  const end = new Date(start);
+  end.setDate(end.getDate() + 17 * 7); // ~17 weeks covers teaching + breaks
+  const iso = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return { firstMonday: iso(start), endISO: iso(end) };
+}
+
 const SEM_LS_KEY = "uq_semester_v1";
 
 export function loadSemester(): SemesterSel | null {
