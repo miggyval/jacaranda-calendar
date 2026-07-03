@@ -18,6 +18,7 @@ export interface ApiActivity {
   week_pattern?: string; // per-week 0/1 string
   availability?: number; // remaining seats
   selectable?: string; // "available", ...
+  staff?: string; // teaching staff allocated, e.g. "Matthew D'Souza"
   [k: string]: unknown;
 }
 
@@ -148,6 +149,7 @@ function activityToEvent(courseCode: string, title: string | undefined, a: ApiAc
     ...(building ? { building } : {}),
     ...(typeof a.availability === "number" ? { availability: a.availability } : {}),
     ...(a.selectable ? { selectable: a.selectable } : {}),
+    ...(a.staff ? { staff: a.staff.trim() } : {}),
   };
 }
 

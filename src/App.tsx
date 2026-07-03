@@ -5,6 +5,7 @@ import { parseClassesCsv } from "./lib/parseCsv";
 import { fetchCourseEvents } from "./lib/uqApi";
 import { defaultSemester, loadSemester, saveSemester, type SemesterSel } from "./lib/semester";
 import { groupKeyOf } from "./lib/weeks";
+import { downloadTextFile } from "./lib/download";
 import type { ClassEvent, PlanMode } from "./lib/types";
 
 const LS_KEY = "uq_timetable_state_v2";
@@ -89,6 +90,27 @@ function loadPlans(): SavedPlan[] {
   return [];
 }
 
+// Shared shape check for events from localStorage or an imported plan file.
+function isValidEvents(events: unknown): events is ClassEvent[] {
+  if (!Array.isArray(events)) return false;
+  return events.every(
+    (e: any) =>
+      typeof e?.id === "string" &&
+      typeof e?.courseCode === "string" &&
+      typeof e?.classCode === "string" &&
+      typeof e?.day === "string" &&
+      typeof e?.startMin === "number" &&
+      typeof e?.endMin === "number" &&
+      typeof e?.location === "string"
+  );
+}
+
+// Envelope marker for exported .uqplan files.
+const PLAN_FILE_APP = "uq-timetable-planner";
+function newPlanId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 export default function App() {
   const [events, setEvents] = useState<ClassEvent[]>([]);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
@@ -126,19 +148,7 @@ export default function App() {
       if (!Array.isArray(parsed.selectedIds)) throw new Error("Bad selectedIds");
       if (!Array.isArray(parsed.hiddenIds)) throw new Error("Bad hiddenIds");
 
-      for (const e of parsed.events) {
-        if (
-          typeof e?.id !== "string" ||
-          typeof e?.courseCode !== "string" ||
-          typeof e?.classCode !== "string" ||
-          typeof e?.day !== "string" ||
-          typeof e?.startMin !== "number" ||
-          typeof e?.endMin !== "number" ||
-          typeof e?.location !== "string"
-        ) {
-          throw new Error("Incompatible saved timetable");
-        }
-      }
+      if (!isValidEvents(parsed.events)) throw new Error("Incompatible saved timetable");
 
       setEvents(parsed.events);
       setSelected(new Set(parsed.selectedIds));
@@ -229,9 +239,8 @@ export default function App() {
     setCurrentPlanId(id);
   }
 
-  function loadPlan(id: string) {
-    const p = plans.find((x) => x.id === id);
-    if (!p) return;
+  // Load a plan snapshot into the working state (shared by load + file import).
+  function applyPlan(p: SavedPlan) {
     setEvents(p.events);
     setSelected(new Set(p.selectedIds));
     setHidden(new Set(p.hiddenIds));
@@ -240,12 +249,71 @@ export default function App() {
     setMode(p.mode);
     setHoveredId(null);
     setPreviewGroupKey(null);
+  }
+
+  function loadPlan(id: string) {
+    const p = plans.find((x) => x.id === id);
+    if (!p) return;
+    applyPlan(p);
     setCurrentPlanId(id);
   }
 
   function deletePlan(id: string) {
     setPlans((prev) => prev.filter((p) => p.id !== id));
     setCurrentPlanId((cur) => (cur === id ? null : cur));
+  }
+
+  // Export the current working timetable as a portable .uqplan file.
+  function exportPlan() {
+    if (events.length === 0) return;
+    const current = plans.find((p) => p.id === currentPlanId);
+    const name = current?.name ?? "UQ timetable";
+    const plan: SavedPlan = {
+      id: currentPlanId ?? newPlanId(),
+      name,
+      savedAt: Date.now(),
+      events,
+      selectedIds: Array.from(selected),
+      hiddenIds: Array.from(hidden),
+      clashIgnoredIds: Array.from(clashIgnored),
+      semester,
+      mode,
+    };
+    const envelope = { app: PLAN_FILE_APP, kind: "plan", v: 1, plan };
+    const safe = name.replace(/[^a-z0-9._-]+/gi, "_");
+    downloadTextFile(`${safe}.uqplan`, JSON.stringify(envelope, null, 2), "application/json");
+  }
+
+  async function importPlan(file: File) {
+    setError(null);
+    try {
+      const env = JSON.parse(await file.text());
+      if (!env || env.app !== PLAN_FILE_APP || env.kind !== "plan" || !env.plan) {
+        throw new Error("Not a UQ Timetable plan file");
+      }
+      const p = env.plan as SavedPlan;
+      if (!isValidEvents(p.events) || !Array.isArray(p.selectedIds)) {
+        throw new Error("Plan file has invalid or missing classes");
+      }
+      // Give it a fresh id if one with the same id already exists, so it doesn't overwrite.
+      const id = plans.some((x) => x.id === p.id) ? newPlanId() : p.id ?? newPlanId();
+      const plan: SavedPlan = {
+        id,
+        name: typeof p.name === "string" && p.name.trim() ? p.name : "Imported timetable",
+        savedAt: Date.now(),
+        events: p.events,
+        selectedIds: p.selectedIds,
+        hiddenIds: Array.isArray(p.hiddenIds) ? p.hiddenIds : [],
+        clashIgnoredIds: Array.isArray(p.clashIgnoredIds) ? p.clashIgnoredIds : [],
+        semester: p.semester ?? semester,
+        mode: p.mode === "staff" ? "staff" : "student",
+      };
+      applyPlan(plan);
+      setPlans((prev) => [...prev.filter((x) => x.id !== plan.id), plan]);
+      setCurrentPlanId(plan.id);
+    } catch (e: any) {
+      setError(e?.message ?? "Could not import plan file");
+    }
   }
 
   const allIds = useMemo(() => events.map((e) => e.id), [events]);
@@ -417,6 +485,8 @@ export default function App() {
         onSavePlan={savePlan}
         onLoadPlan={loadPlan}
         onDeletePlan={deletePlan}
+        onExportPlan={exportPlan}
+        onImportPlan={importPlan}
         loading={loading}
         error={error}
       />

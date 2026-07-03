@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, Download, X, Trash2, EyeOff } from "lucide-react";
+import { Check, Download, X, Trash2, EyeOff, FileDown, FileUp, Eye } from "lucide-react";
 import clsx from "clsx";
+import { courseToColor } from "../lib/colors";
 import { formatMinutes } from "../lib/time";
 import { listSemesters, semesterValue, parseSemesterValue, type SemesterSel } from "../lib/semester";
 import { searchCourses, type CourseMatch } from "../lib/uqApi";
@@ -32,6 +33,8 @@ type Props = {
   onSavePlan: (name: string) => void;
   onLoadPlan: (id: string) => void;
   onDeletePlan: (id: string) => void;
+  onExportPlan: () => void;
+  onImportPlan: (file: File) => void;
   loading: boolean;
   error?: string | null;
   allocatedHours: number;
@@ -137,11 +140,14 @@ export function Sidebar({
   onSavePlan,
   onLoadPlan,
   onDeletePlan,
+  onExportPlan,
+  onImportPlan,
   loading,
   error,
   allocatedHours,
 }: Props) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const planInputRef = useRef<HTMLInputElement | null>(null);
   const [q, setQ] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("numeric");
   const [courseInput, setCourseInput] = useState("");
@@ -294,8 +300,8 @@ export function Sidebar({
   }, [filtered, sortMode]);
 
   return (
-    <aside className="w-[420px] max-w-[44vw] shrink-0 border-r border-white/10 bg-[#0b0f14]/70 backdrop-blur-xl">
-      <div className="p-4">
+    <aside className="flex h-screen w-[420px] max-w-[44vw] shrink-0 flex-col border-r border-white/10 bg-[#0b0f14]/70 backdrop-blur-xl">
+      <div className="shrink-0 p-4">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="truncate text-[13px] font-semibold text-white/85">
@@ -347,7 +353,7 @@ export function Sidebar({
             ))}
           </select>
 
-          <div className="relative w-full">
+          <div className="relative min-w-0 flex-1">
             <input
               value={courseInput}
               onChange={(e) => setCourseInput(e.target.value)}
@@ -400,11 +406,11 @@ export function Sidebar({
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Search…"
-            className="selection-ring w-full rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-[12px] outline-none placeholder:text-white/35"
+            className="selection-ring min-w-0 flex-1 rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-[12px] outline-none placeholder:text-white/35"
           />
 
           <button
-            className="selection-ring rounded-lg border border-white/10 bg-white/5 p-2 text-white/80 hover:bg-white/10 disabled:opacity-30"
+            className="selection-ring shrink-0 rounded-lg border border-white/10 bg-white/5 p-2 text-white/80 hover:bg-white/10 disabled:opacity-30"
             onClick={onSelectAll}
             disabled={events.length === 0}
             title="Select all"
@@ -414,7 +420,7 @@ export function Sidebar({
           </button>
 
           <button
-            className="selection-ring rounded-lg border border-white/10 bg-white/5 p-2 text-white/80 hover:bg-white/10 disabled:opacity-30"
+            className="selection-ring shrink-0 rounded-lg border border-white/10 bg-white/5 p-2 text-white/80 hover:bg-white/10 disabled:opacity-30"
             onClick={onClear}
             disabled={events.length === 0}
             title="Clear selection"
@@ -424,12 +430,13 @@ export function Sidebar({
           </button>
 
           <button
-            className="selection-ring rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[12px] font-medium text-white/80 hover:bg-white/10 disabled:opacity-30"
+            className="selection-ring shrink-0 rounded-lg border border-white/10 bg-white/5 p-2 text-white/80 hover:bg-white/10 disabled:opacity-30"
             onClick={onShowAll}
             disabled={events.length === 0 || hidden.size === 0}
             title="Unhide all"
+            aria-label="Unhide all"
           >
-            Show all
+            <Eye className="h-4 w-4" />
           </button>
         </div>
 
@@ -498,6 +505,36 @@ export function Sidebar({
             >
               <Trash2 className="h-4 w-4" />
             </button>
+            <button
+              type="button"
+              onClick={onExportPlan}
+              disabled={events.length === 0}
+              className="selection-ring shrink-0 rounded-lg border border-white/10 bg-white/5 p-1.5 text-white/80 hover:bg-white/10 disabled:opacity-30"
+              title="Export plan to a file (.uqplan)"
+              aria-label="Export plan to a file"
+            >
+              <FileDown className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => planInputRef.current?.click()}
+              className="selection-ring shrink-0 rounded-lg border border-white/10 bg-white/5 p-1.5 text-white/80 hover:bg-white/10"
+              title="Import plan from a file (.uqplan)"
+              aria-label="Import plan from a file"
+            >
+              <FileUp className="h-4 w-4" />
+            </button>
+            <input
+              ref={planInputRef}
+              type="file"
+              accept=".uqplan,.json,application/json"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) onImportPlan(f);
+                e.currentTarget.value = "";
+              }}
+            />
           </div>
           <div className="flex items-center gap-2">
             <input
@@ -507,7 +544,7 @@ export function Sidebar({
                 if (e.key === "Enter") handleSavePlan();
               }}
               placeholder="Name this plan…"
-              className="selection-ring w-full rounded-lg border border-white/10 bg-black/25 px-3 py-1.5 text-[11px] outline-none placeholder:text-white/35"
+              className="selection-ring min-w-0 flex-1 rounded-lg border border-white/10 bg-black/25 px-3 py-1.5 text-[11px] outline-none placeholder:text-white/35"
             />
             <button
               type="button"
@@ -528,8 +565,8 @@ export function Sidebar({
         ) : null}
       </div>
 
-      <div className="h-[calc(100vh-140px)] overflow-auto px-3 pb-4">
-        <div className="rounded-2xl border border-white/10 bg-white/5">
+      <div className="min-h-0 flex-1 overflow-auto px-3 pb-4">
+        <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/5">
           <div
             className="sticky top-0 z-10 grid gap-2 border-b border-white/10 bg-[#0b0f14]/95 px-3 py-2 text-[11px] font-semibold text-white/50 backdrop-blur"
             style={{ gridTemplateColumns: "20px 74px 30px 78px minmax(0,1fr) auto 20px" }}
@@ -545,9 +582,16 @@ export function Sidebar({
 
           <div className="divide-y divide-white/10">
             {grouped.map((group) => (
-              <div key={group.courseCode}>
+              <div
+                key={group.courseCode}
+                style={{ borderLeft: `3px solid ${courseToColor(group.courseCode)}` }}
+              >
                 <div className="flex items-center justify-between gap-2 px-3 py-2">
-                  <div className="flex min-w-0 items-baseline text-[13px] font-extrabold tracking-wide text-white/85">
+                  <div className="flex min-w-0 items-center text-[13px] font-extrabold tracking-wide text-white/85">
+                    <span
+                      className="mr-2 inline-block shrink-0 rounded-[3px]"
+                      style={{ width: 10, height: 10, background: courseToColor(group.courseCode) }}
+                    />
                     <span className="shrink-0">{group.courseCode}:</span>
                     {group.items[0]?.title ? (
                       <span

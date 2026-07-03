@@ -25,6 +25,7 @@ export interface ClassEvent {
   building?: string; // full building name, e.g. "Andrew N. Liveris Building"
   availability?: number; // remaining seats (UQ "availability")
   selectable?: string; // UQ "selectable" status, e.g. "available"
+  staff?: string; // teaching staff allocated to the session, e.g. "Matthew D'Souza"
 }
 
 export interface PositionedEvent extends ClassEvent {

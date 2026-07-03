@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { toPng } from "html-to-image";
-import { X, Upload, Plus, AlertTriangle, Bell, BellOff, ArrowLeftRight } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { toPng, toBlob } from "html-to-image";
+import { X, Upload, Plus, AlertTriangle, Bell, BellOff, ArrowLeftRight, ClipboardCopy, FileSpreadsheet } from "lucide-react";
 import clsx from "clsx";
+import Papa from "papaparse";
 import { daysInData, layoutEventsByDay } from "../lib/layout";
 import { formatMinutes } from "../lib/time";
 import { courseToColor, hexToRgba } from "../lib/colors";
+import { downloadTextFile, downloadBlob } from "../lib/download";
 import {
   clashingIds,
   deriveWeeks,
@@ -19,12 +21,20 @@ import JSZip from "jszip";
 
 const ICS_TZID = "Australia/Brisbane";
 
+// Ignore a few px of overflow so cards that essentially fit don't do a pointless crawl on hover.
+const OVERFLOW_TOL = 6;
+
 function pad2(n: number) {
   return String(n).padStart(2, "0");
 }
 
 function safeFilename(s: string) {
   return s.replace(/[^a-z0-9._-]+/gi, "_");
+}
+
+// Room + building on one line, e.g. "50-S201 Hawken Engineering Building".
+function fullLocation(e: { location: string; building?: string }): string {
+  return e.building ? `${e.location} ${e.building}` : e.location;
 }
 
 function escapeIcsText(s: string) {
@@ -34,6 +44,29 @@ function escapeIcsText(s: string) {
     .replace(/\n/g, "\\n")
     .replace(/,/g, "\\,")
     .replace(/;/g, "\\;");
+}
+
+// RFC 5545 content lines must be folded at 75 octets (continuation = CRLF + one space).
+function foldIcsLine(line: string): string {
+  const enc = new TextEncoder();
+  if (enc.encode(line).length <= 75) return line;
+  const out: string[] = [];
+  let cur = "";
+  let curBytes = 0;
+  for (const ch of line) {
+    const chBytes = enc.encode(ch).length;
+    // First physical line holds 75 octets; continuations reserve 1 for the leading space.
+    const limit = out.length === 0 ? 75 : 74;
+    if (curBytes + chBytes > limit) {
+      out.push(cur);
+      cur = "";
+      curBytes = 0;
+    }
+    cur += ch;
+    curBytes += chBytes;
+  }
+  out.push(cur);
+  return out.join("\r\n ");
 }
 
 function ymdToDateLocal(ymd: string) {
@@ -74,16 +107,6 @@ function icsLocalDateTime(dt: Date) {
   return `${y}${m}${d}T${hh}${mm}${ss}`;
 }
 
-function downloadTextFile(filename: string, text: string, mime = "text/calendar;charset=utf-8") {
-  const blob = new Blob([text], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
 // Weekly occurrences across the semester for events with no real dates (CSV imports).
 function fallbackWeeklyDates(e: ClassEvent, semester: SemesterSel): string[] {
   const { firstMonday, endISO } = semesterDates(semester);
@@ -98,14 +121,38 @@ function fallbackWeeklyDates(e: ClassEvent, semester: SemesterSel): string[] {
   return out;
 }
 
-function buildIcsForEvents(events: ClassEvent[], semester: SemesterSel) {
+function buildIcsForEvents(
+  events: ClassEvent[],
+  semester: SemesterSel,
+  opts?: { calName?: string; color?: string; mode?: PlanMode }
+) {
   const dtstamp = icsLocalDateTime(new Date());
+  const calName = opts?.calName ?? `UQ Timetable — ${semester.code} ${semester.year}`;
 
   const lines: string[] = [];
   lines.push("BEGIN:VCALENDAR");
   lines.push("VERSION:2.0");
   lines.push("PRODID:-//UQ Timetable Planner//EN");
   lines.push("CALSCALE:GREGORIAN");
+  lines.push("METHOD:PUBLISH");
+  lines.push(`X-WR-CALNAME:${escapeIcsText(calName)}`);
+  lines.push(`NAME:${escapeIcsText(calName)}`);
+  lines.push(`X-WR-TIMEZONE:${ICS_TZID}`);
+  if (opts?.color) {
+    // Apple reads the hex here; distinct colour per course when exported one file each.
+    lines.push(`X-APPLE-CALENDAR-COLOR:${opts.color}`);
+  }
+
+  // Brisbane observes no DST, so a single STANDARD offset fully defines the zone.
+  lines.push("BEGIN:VTIMEZONE");
+  lines.push(`TZID:${ICS_TZID}`);
+  lines.push("BEGIN:STANDARD");
+  lines.push("DTSTART:19700101T000000");
+  lines.push("TZOFFSETFROM:+1000");
+  lines.push("TZOFFSETTO:+1000");
+  lines.push("TZNAME:AEST");
+  lines.push("END:STANDARD");
+  lines.push("END:VTIMEZONE");
 
   for (const e of events) {
     // Scraped classes carry their real dates; CSV imports fall back to weekly across the semester.
@@ -121,16 +168,27 @@ function buildIcsForEvents(events: ClassEvent[], semester: SemesterSel) {
     const summary = e.title
       ? `${e.courseCode} ${e.classCode} — ${e.title}`
       : `${e.courseCode} ${e.classCode}`;
-    const description =
-      `${e.courseCode} ${e.classCode}\n` +
-      `${formatMinutes(e.startMin)}–${formatMinutes(e.endMin)}\n` +
-      `${e.location}`;
+    const loc = fullLocation(e);
+    const descParts = [
+      e.title ? `${e.courseCode}: ${e.title}` : e.courseCode,
+      e.classCode,
+      `${formatMinutes(e.startMin)}–${formatMinutes(e.endMin)}`,
+      loc,
+    ];
+    // Staff plans care about who's teaching; student plans care about remaining seats.
+    if (opts?.mode === "staff") {
+      if (e.staff) descParts.push(`Staff: ${e.staff}`);
+    } else if (typeof e.availability === "number") {
+      descParts.push(`Seats left: ${e.availability}`);
+    }
+    const description = descParts.join("\n");
 
     lines.push("BEGIN:VEVENT");
     lines.push(`UID:${escapeIcsText(uid)}`);
     lines.push(`DTSTAMP:${dtstamp}`);
+    lines.push("SEQUENCE:0");
     lines.push(`SUMMARY:${escapeIcsText(summary)}`);
-    lines.push(`LOCATION:${escapeIcsText(e.location)}`);
+    lines.push(`LOCATION:${escapeIcsText(loc)}`);
     lines.push(`DESCRIPTION:${escapeIcsText(description)}`);
     lines.push(`DTSTART;TZID=${ICS_TZID}:${icsLocalDateTime(startDt)}`);
     lines.push(`DTEND;TZID=${ICS_TZID}:${icsLocalDateTime(endDt)}`);
@@ -143,13 +201,20 @@ function buildIcsForEvents(events: ClassEvent[], semester: SemesterSel) {
       lines.push(`RDATE;TZID=${ICS_TZID}:${rdates.join(",")}`);
     }
 
+    // A 10-minute pop reminder before each class.
+    lines.push("BEGIN:VALARM");
+    lines.push("ACTION:DISPLAY");
+    lines.push(`DESCRIPTION:${escapeIcsText(summary)}`);
+    lines.push("TRIGGER:-PT10M");
+    lines.push("END:VALARM");
+
     lines.push("END:VEVENT");
   }
 
   lines.push("END:VCALENDAR");
 
-  // iCal expects CRLF line endings
-  return lines.join("\r\n") + "\r\n";
+  // iCal expects CRLF line endings, with long lines folded at 75 octets.
+  return lines.map(foldIcsLine).join("\r\n") + "\r\n";
 }
 
 
@@ -260,11 +325,15 @@ export function Timetable({
   );
 
   const captureRef = useRef<HTMLDivElement | null>(null);
+  // While true, the capture region also renders a title/legend header (for PNG export).
+  const [exporting, setExporting] = useState(false);
+
+  const semLabel = `${semester.code} ${semester.year}`;
 
   function exportIcal() {
     // Export only the selected (and not hidden) events.
-    const ics = buildIcsForEvents(selectedEvents, semester);
-    downloadTextFile("timetable.ics", ics);
+    const ics = buildIcsForEvents(selectedEvents, semester, { mode });
+    downloadTextFile(`timetable_${semester.code}_${semester.year}.ics`, ics);
   }
 
   async function exportIcalZipPerCourse() {
@@ -282,34 +351,73 @@ export function Timetable({
     const folder = zip.folder("iCal_by_course")!;
 
     for (const [courseCode, evs] of byCourse) {
-      const ics = buildIcsForEvents(evs, semester);
+      const title = evs.find((e) => e.title)?.title;
+      // Per-course calendar name + colour so each imports as a distinct, coloured calendar.
+      const ics = buildIcsForEvents(evs, semester, {
+        calName: title ? `${courseCode} — ${title}` : courseCode,
+        color: courseToColor(courseCode),
+        mode,
+      });
 
       // .ics files are just UTF-8 text
       folder.file(`${safeFilename(courseCode)}.ics`, ics);
     }
 
     const blob = await zip.generateAsync({ type: "blob" });
+    downloadBlob(`timetables_${semester.code}_${semester.year}.zip`, blob);
+  }
 
-    // download blob
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `timetables_${semester.code}_${semester.year}.zip`;
-    a.click();
-    URL.revokeObjectURL(url);
+  function exportCsv() {
+    // Round-trips with parseClassesCsv: all classes, Enabled=1 for the currently selected ones.
+    const rows = events.map((e) => ({
+      CourseCode: e.courseCode,
+      ClassCode: e.classCode,
+      Day: e.day,
+      StartTime: formatMinutes(e.startMin),
+      EndTime: formatMinutes(e.endMin),
+      Location: e.location,
+      Enabled: selected.has(e.id) ? 1 : 0,
+    }));
+    const csv = Papa.unparse(rows, {
+      columns: ["CourseCode", "ClassCode", "Day", "StartTime", "EndTime", "Location", "Enabled"],
+    });
+    downloadTextFile(`timetable_${semester.code}_${semester.year}.csv`, csv, "text/csv;charset=utf-8");
+  }
+
+  // Render the export header, wait two frames for layout, then run the capture.
+  async function withExportHeader<T>(capture: () => Promise<T>): Promise<T | undefined> {
+    if (!captureRef.current) return undefined;
+    setExporting(true);
+    try {
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      return await capture();
+    } finally {
+      setExporting(false);
+    }
   }
 
   async function exportPng() {
-    if (!captureRef.current) return;
-    const dataUrl = await toPng(captureRef.current, {
-      pixelRatio: 2,
-      backgroundColor: "#2b0a3d",
+    const pngName = `timetable_${semester.code}_${semester.year}${activeWeek ? `_wk${activeWeek}` : ""}.png`;
+    await withExportHeader(async () => {
+      const dataUrl = await toPng(captureRef.current!, { pixelRatio: 2, backgroundColor: "#2b0a3d" });
+      const a = document.createElement("a");
+      a.href = dataUrl;
+      a.download = pngName;
+      a.click();
     });
+  }
 
-    const a = document.createElement("a");
-    a.href = dataUrl;
-    a.download = "timetable.png";
-    a.click();
+  async function copyPng() {
+    await withExportHeader(async () => {
+      const blob = await toBlob(captureRef.current!, { pixelRatio: 2, backgroundColor: "#2b0a3d" });
+      if (!blob) return;
+      try {
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      } catch {
+        // Some webviews block writing images to the clipboard — fall back to a download.
+        downloadBlob(`timetable_${semester.code}_${semester.year}.png`, blob);
+      }
+    });
   }
 
   const days = daysInData(events);
@@ -322,6 +430,13 @@ export function Timetable({
 
   const hours: number[] = [];
   for (let t = start; t <= end; t += 60) hours.push(t);
+
+  // Title/caption/legend shown in the exported image (only while `exporting`).
+  const activeWeekOpt = activeWeek ? weeks.find((w) => w.weekStartISO === activeWeek) : null;
+  const pngCaption = activeWeekOpt
+    ? `Week ${activeWeekOpt.index} · ${weekRangeLabel(activeWeek!)}`
+    : "All weeks";
+  const legendCourses = Array.from(new Set(selectedEvents.map((e) => e.courseCode)));
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -359,11 +474,29 @@ export function Timetable({
             </button>
 
             <button
+              className="selection-ring inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[12px] font-medium text-white/80 hover:bg-white/10"
+              onClick={exportCsv}
+              title="Export CSV (re-importable)"
+            >
+              <FileSpreadsheet className="h-4 w-4" />
+              CSV
+            </button>
+
+            <button
               className="selection-ring rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[12px] font-medium text-white/80 hover:bg-white/10"
               onClick={exportPng}
               title="Export PNG"
             >
               <Upload className="h-4 w-4" />
+            </button>
+
+            <button
+              className="selection-ring rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[12px] font-medium text-white/80 hover:bg-white/10"
+              onClick={copyPng}
+              title="Copy timetable image to clipboard"
+              aria-label="Copy timetable image to clipboard"
+            >
+              <ClipboardCopy className="h-4 w-4" />
             </button>
           </div>
         </div>
@@ -378,6 +511,26 @@ export function Timetable({
             onPreviewGroupKeyChange(null);
           }}
         >
+          {exporting && (
+            <div style={{ padding: "18px 22px 6px" }}>
+              <div style={{ fontSize: 18, fontWeight: 800, color: "#ffffff", letterSpacing: "-0.01em" }}>
+                UQ Timetable — {semLabel}
+              </div>
+              <div style={{ marginTop: 2, fontSize: 12, color: "rgba(255,255,255,0.55)" }}>{pngCaption}</div>
+              {legendCourses.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 12 }}>
+                  {legendCourses.map((c) => (
+                    <div key={c} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span
+                        style={{ width: 12, height: 12, borderRadius: 3, background: courseToColor(c), display: "inline-block" }}
+                      />
+                      <span style={{ fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,0.82)" }}>{c}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           <div
             className="grid border-b border-white/10"
             style={{ gridTemplateColumns: `80px repeat(${days.length}, minmax(0, 1fr))` }}
@@ -597,6 +750,66 @@ function DayColumn({
 }
 
 
+// A single text line that, when it's too narrow to show its full text, scrolls
+// horizontally to reveal the clipped tail after the card is hovered for 1.5s
+// (mirrors the vertical auto-scroll on short cards). Idle, it shows an ellipsis.
+function ScrollLine({
+  text,
+  className,
+  style,
+  hovered,
+}: {
+  text: string;
+  className?: string;
+  style?: CSSProperties;
+  hovered: boolean;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const hoveredRef = useRef(hovered);
+  hoveredRef.current = hovered;
+  const [overflow, setOverflow] = useState(0);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const reduceMotion =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const measure = () => {
+      // Only meaningful at text-indent 0, so skip while the line is scrolled open.
+      if (!ref.current || hoveredRef.current) return;
+      const o = ref.current.scrollWidth - ref.current.clientWidth;
+      setOverflow(reduceMotion || o <= OVERFLOW_TOL ? 0 : o);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [text, style?.fontWeight]);
+
+  const active = overflow > 0;
+  return (
+    <div
+      ref={ref}
+      className={clsx("truncate", className)}
+      style={{
+        ...style,
+        ...(active
+          ? {
+              textIndent: hovered ? `-${overflow}px` : "0px",
+              textOverflow: hovered ? "clip" : "ellipsis",
+              transition: hovered
+                ? `text-indent ${Math.max(0.8, overflow / 40)}s ease-in-out 1s`
+                : "text-indent 0.25s ease",
+            }
+          : {}),
+      }}
+    >
+      {text}
+    </div>
+  );
+}
+
 function EventCard({
   e,
   start,
@@ -666,12 +879,34 @@ function EventCard({
     return () => cancelAnimationFrame(id);
   }, []);
 
+  // When a short card can't show all its text, hovering scrolls it up to reveal the bottom.
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const [cardHovered, setCardHovered] = useState(false);
+  const [overflowPx, setOverflowPx] = useState(0);
+
+  useLayoutEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    const reduceMotion =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const available = height - 16; // card height minus py-2 (8 + 8)
+    const raw = el.scrollHeight - available;
+    setOverflowPx(reduceMotion || raw <= OVERFLOW_TOL ? 0 : raw);
+  }, [height, isTiny, e.courseCode, e.classCode, e.location, e.building, isClashing, isClashIgnored]);
+
   return (
     <div
       data-event-card="1"
       title={isTiny ? tooltip : undefined}
-      onMouseEnter={() => onHoverChange(e.id)}
-      onMouseLeave={() => onHoverChange(null)}
+      onMouseEnter={() => {
+        onHoverChange(e.id);
+        setCardHovered(true);
+      }}
+      onMouseLeave={() => {
+        onHoverChange(null);
+        setCardHovered(false);
+      }}
       onClick={() => {
         onPreviewGroupKeyChange(isGroupActive ? null : groupKey);
       }}
@@ -751,31 +986,46 @@ function EventCard({
       ) : null}
 
       <div
+        ref={contentRef}
         className="min-w-0 pr-6 relative"
-        style={{ paddingLeft: isClashing || isClashIgnored ? 26 : 8 }}
+        style={{
+          paddingLeft: isClashing || isClashIgnored ? 26 : 8,
+          ...(overflowPx > 0
+            ? {
+                transform: cardHovered ? `translateY(-${overflowPx}px)` : "translateY(0)",
+                transition: cardHovered
+                  ? `transform ${Math.max(1, overflowPx / 35)}s ease-in-out 1s`
+                  : "transform 0.25s ease",
+                willChange: "transform",
+              }
+            : {}),
+        }}
       >
-        <div
-          className="truncate text-[12px] leading-4"
+        <ScrollLine
+          className="text-[12px] leading-4"
           style={{ fontWeight: isHovered || isGroupHighlight ? 800 : 600 }}
-        >
-          {e.courseCode}
-        </div>
-        <div
-          className="truncate text-[11px] text-white/80"
+          hovered={cardHovered}
+          text={e.courseCode}
+        />
+        <ScrollLine
+          className="text-[11px] text-white/80"
           style={{ fontWeight: isHovered || isGroupHighlight ? 800 : 500 }}
-        >
-          {e.classCode}
-        </div>
+          hovered={cardHovered}
+          text={e.classCode}
+        />
 
         {!isTiny && (
           <>
-            <div className="mt-1 truncate text-[11px] text-white/75 tabular-nums font-mono">
-              {formatMinutes(e.startMin)}–{formatMinutes(e.endMin)}
-            </div>
-            <div className="mt-1 truncate text-[11px] text-white/65">{e.location}</div>
-            {e.building ? (
-              <div className="truncate text-[10px] leading-tight text-white/45">{e.building}</div>
-            ) : null}
+            <ScrollLine
+              className="mt-1 text-[11px] text-white/75 tabular-nums font-mono"
+              hovered={cardHovered}
+              text={`${formatMinutes(e.startMin)}–${formatMinutes(e.endMin)}`}
+            />
+            <ScrollLine
+              className="mt-1 text-[11px] text-white/65"
+              hovered={cardHovered}
+              text={fullLocation(e)}
+            />
           </>
         )}
       </div>
