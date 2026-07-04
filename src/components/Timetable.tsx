@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { toPng, toBlob } from "html-to-image";
 import { X, Upload, Plus, AlertTriangle, Bell, BellOff, ArrowLeftRight, ClipboardCopy, FileSpreadsheet } from "lucide-react";
 import clsx from "clsx";
@@ -895,9 +895,88 @@ function EventCard({
     setOverflowPx(reduceMotion || raw <= OVERFLOW_TOL ? 0 : raw);
   }, [height, isTiny, e.courseCode, e.classCode, e.location, e.building, isClashing, isClashIgnored]);
 
+  // Student-mode drag-to-swap: drag a selected card onto an equivalent ghost slot to switch streams.
+  const canDrag = mode === "student" && isEnabled;
+  const dragRef = useRef<{ startX: number; startY: number; dragging: boolean; pointerId: number } | null>(null);
+  const didDragRef = useRef(false);
+  const highlightRef = useRef<HTMLElement | null>(null);
+  const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null);
+
+  function clearHighlight() {
+    if (highlightRef.current) {
+      highlightRef.current.style.outline = "";
+      highlightRef.current.style.outlineOffset = "";
+      highlightRef.current = null;
+    }
+  }
+
+  // The equivalent ghost card under (x,y), or null. Hides `self` so it doesn't shadow the ghost.
+  function ghostUnder(x: number, y: number, self: HTMLElement): HTMLElement | null {
+    const prev = self.style.pointerEvents;
+    self.style.pointerEvents = "none";
+    const el = ((document.elementFromPoint(x, y) as HTMLElement | null)?.closest(
+      "[data-event-card]"
+    ) ?? null) as HTMLElement | null;
+    self.style.pointerEvents = prev;
+    if (el && el.dataset.groupKey === groupKey && el.dataset.enabled === "0" && el.dataset.eventId && el.dataset.eventId !== e.id) {
+      return el;
+    }
+    return null;
+  }
+
+  function onCardPointerDown(ev: ReactPointerEvent<HTMLDivElement>) {
+    if (!canDrag || ev.button !== 0) return;
+    if ((ev.target as HTMLElement).closest("button")) return; // let the ↔ / bell buttons work
+    dragRef.current = { startX: ev.clientX, startY: ev.clientY, dragging: false, pointerId: ev.pointerId };
+    didDragRef.current = false;
+    try {
+      ev.currentTarget.setPointerCapture(ev.pointerId);
+    } catch {
+      // pointer capture is best-effort
+    }
+  }
+
+  function onCardPointerMove(ev: ReactPointerEvent<HTMLDivElement>) {
+    const st = dragRef.current;
+    if (!st) return;
+    const dx = ev.clientX - st.startX;
+    const dy = ev.clientY - st.startY;
+    if (!st.dragging) {
+      if (Math.hypot(dx, dy) < 5) return; // small threshold so plain clicks still work
+      st.dragging = true;
+      didDragRef.current = true;
+      onPreviewGroupKeyChange(groupKey); // reveal the equivalent ghost slots
+    }
+    setDrag({ dx, dy });
+    const target = ghostUnder(ev.clientX, ev.clientY, ev.currentTarget);
+    if (target !== highlightRef.current) {
+      clearHighlight();
+      if (target) {
+        target.style.outline = "2px solid rgba(255,255,255,0.9)";
+        target.style.outlineOffset = "-2px";
+        highlightRef.current = target;
+      }
+    }
+  }
+
+  function endDrag(ev: ReactPointerEvent<HTMLDivElement>, drop: boolean) {
+    const st = dragRef.current;
+    dragRef.current = null;
+    if (!st || !st.dragging) return;
+    const target = drop ? ghostUnder(ev.clientX, ev.clientY, ev.currentTarget) : null;
+    const targetId = target?.dataset.eventId ?? null;
+    clearHighlight();
+    setDrag(null);
+    onPreviewGroupKeyChange(null);
+    if (targetId) onDeselect(targetId); // toggling the ghost on swaps the stream in student mode
+  }
+
   return (
     <div
       data-event-card="1"
+      data-event-id={e.id}
+      data-group-key={groupKey}
+      data-enabled={isEnabled ? "1" : "0"}
       title={isTiny ? tooltip : undefined}
       onMouseEnter={() => {
         onHoverChange(e.id);
@@ -907,7 +986,15 @@ function EventCard({
         onHoverChange(null);
         setCardHovered(false);
       }}
+      onPointerDown={onCardPointerDown}
+      onPointerMove={onCardPointerMove}
+      onPointerUp={(ev) => endDrag(ev, true)}
+      onPointerCancel={(ev) => endDrag(ev, false)}
       onClick={() => {
+        if (didDragRef.current) {
+          didDragRef.current = false;
+          return;
+        }
         onPreviewGroupKeyChange(isGroupActive ? null : groupKey);
       }}
       className={clsx(
@@ -936,7 +1023,11 @@ function EventCard({
           : isClashIgnored
           ? "0 0 0 2px rgba(251,191,36,0.85)"
           : undefined,
-        cursor: "pointer",
+        cursor: drag ? "grabbing" : canDrag ? "grab" : "pointer",
+        touchAction: canDrag ? "none" : undefined,
+        ...(drag
+          ? { transform: `translate(${drag.dx}px, ${drag.dy}px)`, zIndex: 50, transition: "none" }
+          : {}),
       }}
     >
 
