@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { Timetable } from "./components/Timetable";
 import { parseClassesCsv } from "./lib/parseCsv";
@@ -111,6 +111,15 @@ function newPlanId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// One undoable snapshot of the working timetable.
+type Doc = {
+  events: ClassEvent[];
+  selectedIds: string[];
+  hiddenIds: string[];
+  clashIgnoredIds: string[];
+};
+const HISTORY_CAP = 50;
+
 export default function App() {
   const [events, setEvents] = useState<ClassEvent[]>([]);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
@@ -136,6 +145,12 @@ export default function App() {
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Undo/redo stacks for the working timetable (events + selection + hidden + ignored clashes).
+  const [past, setPast] = useState<Doc[]>([]);
+  const [future, setFuture] = useState<Doc[]>([]);
+  const undoRef = useRef<() => void>(() => {});
+  const redoRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     try {
@@ -241,6 +256,7 @@ export default function App() {
 
   // Load a plan snapshot into the working state (shared by load + file import).
   function applyPlan(p: SavedPlan) {
+    commit();
     setEvents(p.events);
     setSelected(new Set(p.selectedIds));
     setHidden(new Set(p.hiddenIds));
@@ -316,9 +332,75 @@ export default function App() {
     }
   }
 
+  function snapshot(): Doc {
+    return {
+      events,
+      selectedIds: Array.from(selected),
+      hiddenIds: Array.from(hidden),
+      clashIgnoredIds: Array.from(clashIgnored),
+    };
+  }
+
+  function restore(d: Doc) {
+    setEvents(d.events);
+    setSelected(new Set(d.selectedIds));
+    setHidden(new Set(d.hiddenIds));
+    setClashIgnored(new Set(d.clashIgnoredIds));
+    setPreviewGroupKey(null);
+    setHoveredId(null);
+  }
+
+  // Record the current state as an undo point (call BEFORE a mutating action). Clears the redo stack.
+  function commit() {
+    const snap = snapshot();
+    setPast((p) => [...p, snap].slice(-HISTORY_CAP));
+    setFuture([]);
+  }
+
+  function undo() {
+    if (past.length === 0) return;
+    const cur = snapshot();
+    const prev = past[past.length - 1];
+    setPast((p) => p.slice(0, -1));
+    setFuture((f) => [cur, ...f].slice(0, HISTORY_CAP));
+    restore(prev);
+  }
+
+  function redo() {
+    if (future.length === 0) return;
+    const cur = snapshot();
+    const next = future[0];
+    setFuture((f) => f.slice(1));
+    setPast((p) => [...p, cur].slice(-HISTORY_CAP));
+    restore(next);
+  }
+
+  undoRef.current = undo;
+  redoRef.current = redo;
+
+  // Cmd/Ctrl+Z to undo, Cmd/Ctrl+Shift+Z or Ctrl+Y to redo (ignored while typing in a field).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+      const k = e.key.toLowerCase();
+      if (k === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undoRef.current();
+      } else if ((k === "z" && e.shiftKey) || k === "y") {
+        e.preventDefault();
+        redoRef.current();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const allIds = useMemo(() => events.map((e) => e.id), [events]);
 
   function toggleSelected(id: string) {
+    commit();
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) {
@@ -341,6 +423,7 @@ export default function App() {
   }
 
   function toggleHidden(id: string) {
+    commit();
     setHidden((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -350,6 +433,7 @@ export default function App() {
   }
 
   function toggleClashIgnore(id: string) {
+    commit();
     setClashIgnored((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -359,15 +443,18 @@ export default function App() {
   }
 
   function selectAll() {
+    commit();
     setSelected(new Set(allIds));
   }
 
   function clearAll() {
+    commit();
     setSelected(new Set());
     setPreviewGroupKey(null);
   }
 
   function showAll() {
+    commit();
     setHidden(new Set());
   }
 
@@ -377,6 +464,7 @@ export default function App() {
       events.filter((e) => e.courseCode === courseCode).map((e) => e.id)
     );
     if (removedIds.size === 0) return;
+    commit();
     setEvents((prev) => prev.filter((e) => e.courseCode !== courseCode));
     setSelected((prev) => {
       const next = new Set(prev);
@@ -398,6 +486,7 @@ export default function App() {
   }
 
   async function importCsv(file: File) {
+    commit();
     setLoading(true);
     setError(null);
     try {
@@ -441,6 +530,7 @@ export default function App() {
     }
 
     if (collected.length > 0) {
+      commit();
       setEvents((prev) => mergeEvents(prev, collected));
     }
     setError(errors.length > 0 ? errors.join(" · ") : null);
@@ -469,6 +559,10 @@ export default function App() {
         onSelectAll={selectAll}
         onClear={clearAll}
         onShowAll={showAll}
+        onUndo={undo}
+        onRedo={redo}
+        canUndo={past.length > 0}
+        canRedo={future.length > 0}
         onRemoveCourse={removeCourse}
         hoveredId={hoveredId}
         onHoverChange={setHoveredId}

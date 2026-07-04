@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, Download, X, Trash2, EyeOff, FileDown, FileUp, Eye } from "lucide-react";
+import { Check, Download, X, Trash2, EyeOff, FileDown, FileUp, Eye, Undo2, Redo2 } from "lucide-react";
 import clsx from "clsx";
 import { courseToColor } from "../lib/colors";
 import { formatMinutes } from "../lib/time";
@@ -17,6 +17,10 @@ type Props = {
   onSelectAll: () => void;
   onClear: () => void;
   onShowAll: () => void;
+  onUndo: () => void;
+  onRedo: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
   onRemoveCourse: (courseCode: string) => void;
   hoveredId: string | null;
   onHoverChange: (id: string | null) => void;
@@ -124,6 +128,10 @@ export function Sidebar({
   onSelectAll,
   onClear,
   onShowAll,
+  onUndo,
+  onRedo,
+  canUndo,
+  canRedo,
   onRemoveCourse,
   hoveredId,
   onHoverChange,
@@ -313,7 +321,27 @@ export function Sidebar({
           </div>
 
           <button
-            className="selection-ring inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-2.5 py-2 text-[12px] font-medium text-white/80 hover:bg-white/10 disabled:opacity-30"
+            className="selection-ring shrink-0 rounded-lg border border-white/10 bg-white/5 p-2 text-white/80 hover:bg-white/10 disabled:opacity-30"
+            onClick={onUndo}
+            disabled={!canUndo}
+            title="Undo (⌘/Ctrl+Z)"
+            aria-label="Undo"
+          >
+            <Undo2 className="h-4 w-4" />
+          </button>
+
+          <button
+            className="selection-ring shrink-0 rounded-lg border border-white/10 bg-white/5 p-2 text-white/80 hover:bg-white/10 disabled:opacity-30"
+            onClick={onRedo}
+            disabled={!canRedo}
+            title="Redo (⇧⌘/Ctrl+Y)"
+            aria-label="Redo"
+          >
+            <Redo2 className="h-4 w-4" />
+          </button>
+
+          <button
+            className="selection-ring inline-flex shrink-0 items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-2.5 py-2 text-[12px] font-medium text-white/80 hover:bg-white/10 disabled:opacity-30"
             onClick={() => fileInputRef.current?.click()}
             disabled={loading}
             title="Upload CSV"
