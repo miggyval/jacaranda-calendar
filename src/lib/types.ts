@@ -26,9 +26,21 @@ export interface ClassEvent {
   availability?: number; // remaining seats (UQ "availability")
   selectable?: string; // UQ "selectable" status, e.g. "available"
   staff?: string; // teaching staff allocated to the session, e.g. "Matthew D'Souza"
+  custom?: boolean; // user-created event (meeting / consultation / activity), not a scraped class
 }
 
 export interface PositionedEvent extends ClassEvent {
   col: number;   // 0..cols-1
   cols: number;  // number of parallel columns in this overlap group
+}
+
+// Draft for a user-created custom event, produced by the add/edit form.
+export interface EventDraft {
+  title: string;
+  category: string;
+  day: Day;
+  startMin: number;
+  endMin: number;
+  location: string;
+  date?: string; // ISO yyyy-mm-dd; present => one-off (shows that week only)
 }

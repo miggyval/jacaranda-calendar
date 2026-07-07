@@ -1,12 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { Check, Download, X, Trash2, EyeOff, FileDown, FileUp, Eye, Undo2, Redo2 } from "lucide-react";
+import {
+  Check, Download, X, Trash2, EyeOff, FileDown, FileUp, Eye, Undo2, Redo2,
+  Lock, LockOpen, CalendarPlus, ChevronDown, ChevronRight,
+} from "lucide-react";
 import clsx from "clsx";
 import { courseToColor } from "../lib/colors";
-import { formatMinutes } from "../lib/time";
+import { formatMinutes, parseTimeToMinutes } from "../lib/time";
 import { listSemesters, semesterValue, parseSemesterValue, type SemesterSel } from "../lib/semester";
 import { searchCourses, type CourseMatch } from "../lib/uqApi";
-import type { ClassEvent, PlanMode, PlanMeta } from "../lib/types";
+import type { ClassEvent, Day, EventDraft, PlanMode, PlanMeta } from "../lib/types";
+
+type EventModalState = { mode: "add" } | { mode: "edit"; event: ClassEvent } | null;
 
 type Props = {
   events: ClassEvent[];
@@ -39,6 +44,14 @@ type Props = {
   onDeletePlan: (id: string) => void;
   onExportPlan: () => void;
   onImportPlan: (file: File) => void;
+  locked: boolean;
+  onToggleLocked: () => void;
+  onOpenAddEvent: () => void;
+  eventModal: EventModalState;
+  onCloseEventModal: () => void;
+  onAddEvent: (d: EventDraft) => void;
+  onUpdateEvent: (id: string, d: EventDraft) => void;
+  onDeleteEvent: (id: string) => void;
   loading: boolean;
   error?: string | null;
   allocatedHours: number;
@@ -119,6 +132,196 @@ function Seg({
   );
 }
 
+const DAY_OPTIONS: { value: Day; label: string }[] = [
+  { value: "MON", label: "Monday" },
+  { value: "TUE", label: "Tuesday" },
+  { value: "WED", label: "Wednesday" },
+  { value: "THU", label: "Thursday" },
+  { value: "FRI", label: "Friday" },
+  { value: "SAT", label: "Saturday" },
+  { value: "SUN", label: "Sunday" },
+];
+
+function todayISO(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// Add/edit form for a user-created custom event, shown in a modal.
+function EventModal({
+  state,
+  onClose,
+  onAdd,
+  onUpdate,
+  onDelete,
+}: {
+  state: Exclude<EventModalState, null>;
+  onClose: () => void;
+  onAdd: (d: EventDraft) => void;
+  onUpdate: (id: string, d: EventDraft) => void;
+  onDelete: (id: string) => void;
+}) {
+  const editing = state.mode === "edit" ? state.event : null;
+  const [title, setTitle] = useState(editing?.courseCode ?? "");
+  const [category, setCategory] = useState(editing?.classCode ?? "Meeting");
+  const [day, setDay] = useState<Day>(editing?.day ?? "MON");
+  const [start, setStart] = useState(editing ? formatMinutes(editing.startMin) : "10:00");
+  const [end, setEnd] = useState(editing ? formatMinutes(editing.endMin) : "11:00");
+  const [location, setLocation] = useState(editing?.location ?? "");
+  const [weekly, setWeekly] = useState(editing ? !editing.activeDates : true);
+  const [date, setDate] = useState(editing?.activeDates?.[0] ?? todayISO());
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  function submit() {
+    const t = title.trim();
+    if (!t) return setErr("Give the event a title.");
+    let s: number, e: number;
+    try {
+      s = parseTimeToMinutes(start);
+      e = parseTimeToMinutes(end);
+    } catch {
+      return setErr("Enter valid times as HH:MM.");
+    }
+    if (e <= s) return setErr("End time must be after the start time.");
+    const draft: EventDraft = {
+      title: t,
+      category: category.trim() || "Event",
+      day,
+      startMin: s,
+      endMin: e,
+      location: location.trim(),
+      ...(weekly ? {} : { date }),
+    };
+    if (editing) onUpdate(editing.id, draft);
+    else onAdd(draft);
+  }
+
+  const labelStyle: CSSProperties = { fontSize: 11, color: "rgba(255,255,255,0.5)", marginBottom: 4, display: "block" };
+  const fieldClass = "selection-ring w-full rounded-lg border border-white/10 bg-black/25 text-white/90 outline-none";
+  const fieldStyle: CSSProperties = { padding: "8px 10px", fontSize: 12 };
+
+  return (
+    <div
+      className="fixed z-[100] flex items-center justify-center"
+      style={{ inset: 0, padding: "1rem", background: "rgba(0,0,0,0.6)", backdropFilter: "blur(2px)", WebkitBackdropFilter: "blur(2px)" }}
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="border border-white/10 bg-[#0b0f14]"
+        style={{ width: 380, maxWidth: "92vw", borderRadius: 16, padding: 20, boxShadow: "0 24px 80px rgba(0,0,0,0.6)" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="text-white/90" style={{ fontSize: 14, fontWeight: 600 }}>
+          {editing ? "Edit event" : "Add event"}
+        </div>
+
+        <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 12 }}>
+          <div>
+            <label style={labelStyle}>Title</label>
+            <input
+              className={fieldClass}
+              style={fieldStyle}
+              value={title}
+              autoFocus
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="e.g. CSSE3010 Consultation"
+            />
+          </div>
+
+          <div style={{ display: "flex", gap: 10 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <label style={labelStyle}>Type</label>
+              <input className={fieldClass} style={fieldStyle} value={category} onChange={(e) => setCategory(e.target.value)} placeholder="Meeting" />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <label style={labelStyle}>Day</label>
+              <select className={fieldClass} style={fieldStyle} value={day} onChange={(e) => setDay(e.target.value as Day)}>
+                {DAY_OPTIONS.map((d) => (
+                  <option key={d.value} value={d.value} className="bg-[#0b0f14]">
+                    {d.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 10 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <label style={labelStyle}>Start</label>
+              <input type="time" className={fieldClass} style={fieldStyle} value={start} onChange={(e) => setStart(e.target.value)} />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <label style={labelStyle}>End</label>
+              <input type="time" className={fieldClass} style={fieldStyle} value={end} onChange={(e) => setEnd(e.target.value)} />
+            </div>
+          </div>
+
+          <div>
+            <label style={labelStyle}>Location (optional)</label>
+            <input className={fieldClass} style={fieldStyle} value={location} onChange={(e) => setLocation(e.target.value)} placeholder="e.g. 78-621" />
+          </div>
+
+          <label className="text-white/80" style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+            <input type="checkbox" checked={weekly} onChange={(e) => setWeekly(e.target.checked)} className="h-4 w-4 accent-sky-400" />
+            Repeat weekly across the semester
+          </label>
+          {!weekly ? (
+            <div>
+              <label style={labelStyle}>Date</label>
+              <input type="date" className={fieldClass} style={fieldStyle} value={date} onChange={(e) => setDate(e.target.value)} />
+            </div>
+          ) : null}
+
+          {err ? <div style={{ fontSize: 11, color: "#fca5a5" }}>{err}</div> : null}
+        </div>
+
+        <div style={{ marginTop: 20, display: "flex", justifyContent: "space-between", gap: 8 }}>
+          <div>
+            {editing ? (
+              <button
+                type="button"
+                onClick={() => onDelete(editing.id)}
+                className="selection-ring border border-white/10 bg-white/5 hover:bg-white/10"
+                style={{ borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 500, color: "#fca5a5" }}
+              >
+                Delete
+              </button>
+            ) : null}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              type="button"
+              onClick={onClose}
+              className="selection-ring border border-white/10 bg-white/5 text-white/80 hover:bg-white/10"
+              style={{ borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 500 }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={submit}
+              className="selection-ring text-white"
+              style={{ borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 600, backgroundColor: "#7c3aed" }}
+            >
+              {editing ? "Save" : "Add"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function Sidebar({
   events,
   selected,
@@ -150,6 +353,14 @@ export function Sidebar({
   onDeletePlan,
   onExportPlan,
   onImportPlan,
+  locked,
+  onToggleLocked,
+  onOpenAddEvent,
+  eventModal,
+  onCloseEventModal,
+  onAddEvent,
+  onUpdateEvent,
+  onDeleteEvent,
   loading,
   error,
   allocatedHours,
@@ -164,6 +375,7 @@ export function Sidebar({
   const [showSuggest, setShowSuggest] = useState(false);
   const [planName, setPlanName] = useState("");
   const [confirmCourse, setConfirmCourse] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const cancelRef = useRef<HTMLButtonElement | null>(null);
 
   function submitAddCourses() {
@@ -321,9 +533,26 @@ export function Sidebar({
           </div>
 
           <button
+            className={clsx(
+              "selection-ring shrink-0 rounded-lg border p-2",
+              !locked && "border-white/10 bg-white/5 text-white/80 hover:bg-white/10"
+            )}
+            style={
+              locked
+                ? { borderColor: "rgba(251,191,36,0.45)", background: "rgba(251,191,36,0.16)", color: "#fcd34d" }
+                : undefined
+            }
+            onClick={onToggleLocked}
+            title={locked ? "Locked — click to unlock editing" : "Lock editing"}
+            aria-label={locked ? "Unlock editing" : "Lock editing"}
+          >
+            {locked ? <Lock className="h-4 w-4" /> : <LockOpen className="h-4 w-4" />}
+          </button>
+
+          <button
             className="selection-ring shrink-0 rounded-lg border border-white/10 bg-white/5 p-2 text-white/80 hover:bg-white/10 disabled:opacity-30"
             onClick={onUndo}
-            disabled={!canUndo}
+            disabled={!canUndo || locked}
             title="Undo (⌘/Ctrl+Z)"
             aria-label="Undo"
           >
@@ -333,7 +562,7 @@ export function Sidebar({
           <button
             className="selection-ring shrink-0 rounded-lg border border-white/10 bg-white/5 p-2 text-white/80 hover:bg-white/10 disabled:opacity-30"
             onClick={onRedo}
-            disabled={!canRedo}
+            disabled={!canRedo || locked}
             title="Redo (⇧⌘/Ctrl+Y)"
             aria-label="Redo"
           >
@@ -392,7 +621,7 @@ export function Sidebar({
               onFocus={() => setShowSuggest(true)}
               onBlur={() => setTimeout(() => setShowSuggest(false), 150)}
               placeholder="Add or search course…"
-              disabled={loading}
+              disabled={loading || locked}
               className="selection-ring w-full rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-[12px] outline-none placeholder:text-white/35 disabled:opacity-40"
             />
 
@@ -421,7 +650,7 @@ export function Sidebar({
 
           <button
             onClick={submitAddCourses}
-            disabled={loading || !courseInput.trim()}
+            disabled={loading || !courseInput.trim() || locked}
             className="selection-ring shrink-0 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-[12px] font-medium text-white/80 hover:bg-white/10 disabled:opacity-30"
             title="Fetch from UQ timetable"
           >
@@ -438,9 +667,19 @@ export function Sidebar({
           />
 
           <button
+            className="selection-ring shrink-0 inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/5 px-2.5 py-2 text-[12px] font-medium text-white/80 hover:bg-white/10 disabled:opacity-30"
+            onClick={onOpenAddEvent}
+            disabled={locked}
+            title="Add a custom event (meeting, consultation, activity…)"
+          >
+            <CalendarPlus className="h-4 w-4" />
+            Event
+          </button>
+
+          <button
             className="selection-ring shrink-0 rounded-lg border border-white/10 bg-white/5 p-2 text-white/80 hover:bg-white/10 disabled:opacity-30"
             onClick={onSelectAll}
-            disabled={events.length === 0}
+            disabled={events.length === 0 || locked}
             title="Select all"
             aria-label="Select all"
           >
@@ -450,7 +689,7 @@ export function Sidebar({
           <button
             className="selection-ring shrink-0 rounded-lg border border-white/10 bg-white/5 p-2 text-white/80 hover:bg-white/10 disabled:opacity-30"
             onClick={onClear}
-            disabled={events.length === 0}
+            disabled={events.length === 0 || locked}
             title="Clear selection"
             aria-label="Clear selection"
           >
@@ -460,7 +699,7 @@ export function Sidebar({
           <button
             className="selection-ring shrink-0 rounded-lg border border-white/10 bg-white/5 p-2 text-white/80 hover:bg-white/10 disabled:opacity-30"
             onClick={onShowAll}
-            disabled={events.length === 0 || hidden.size === 0}
+            disabled={events.length === 0 || hidden.size === 0 || locked}
             title="Unhide all"
             aria-label="Unhide all"
           >
@@ -615,7 +854,25 @@ export function Sidebar({
                 style={{ borderLeft: `3px solid ${courseToColor(group.courseCode)}` }}
               >
                 <div className="flex items-center justify-between gap-2 px-3 py-2">
-                  <div className="flex min-w-0 items-center text-[13px] font-extrabold tracking-wide text-white/85">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCollapsed((prev) => {
+                        const n = new Set(prev);
+                        if (n.has(group.courseCode)) n.delete(group.courseCode);
+                        else n.add(group.courseCode);
+                        return n;
+                      })
+                    }
+                    className="flex min-w-0 items-center text-left text-[13px] font-extrabold tracking-wide text-white/85"
+                    title={collapsed.has(group.courseCode) ? "Expand" : "Collapse"}
+                    aria-expanded={!collapsed.has(group.courseCode)}
+                  >
+                    {collapsed.has(group.courseCode) ? (
+                      <ChevronRight size={14} className="mr-1 shrink-0 text-white/40" />
+                    ) : (
+                      <ChevronDown size={14} className="mr-1 shrink-0 text-white/40" />
+                    )}
                     <span
                       className="mr-2 inline-block shrink-0 rounded-[3px]"
                       style={{ width: 10, height: 10, background: courseToColor(group.courseCode) }}
@@ -629,21 +886,25 @@ export function Sidebar({
                         {group.items[0].title}
                       </span>
                     ) : null}
-                  </div>
+                  </button>
                   <button
                     type="button"
                     onClick={() => setConfirmCourse(group.courseCode)}
-                    className="shrink-0 rounded-md p-1 text-white/40 transition hover:bg-white/10"
+                    disabled={locked}
+                    className="shrink-0 rounded-md p-1 text-white/40 transition hover:bg-white/10 disabled:opacity-30"
                     title={`Remove ${group.courseCode}`}
                     aria-label={`Remove ${group.courseCode}`}
-                    onMouseEnter={(e) => (e.currentTarget.style.color = "#f87171")}
+                    onMouseEnter={(e) => {
+                      if (!locked) e.currentTarget.style.color = "#f87171";
+                    }}
                     onMouseLeave={(e) => (e.currentTarget.style.color = "")}
                   >
                     <Trash2 size={16} />
                   </button>
                 </div>
 
-                {group.items.map((e) => {
+                {!collapsed.has(group.courseCode) &&
+                  group.items.map((e) => {
                   const isOn = selected.has(e.id);
                   const isHidden = hidden.has(e.id);
                   const isHovered = hoveredId === e.id;
@@ -667,7 +928,8 @@ export function Sidebar({
                           type="checkbox"
                           checked={isOn}
                           onChange={() => onToggle(e.id)}
-                          className="h-4 w-4 accent-sky-400"
+                          disabled={locked}
+                          className="h-4 w-4 accent-sky-400 disabled:opacity-30"
                           aria-label={`Toggle ${e.courseCode} ${e.classCode}`}
                         />
                       </div>
@@ -694,6 +956,7 @@ export function Sidebar({
                       <button
                         type="button"
                         onClick={() => onToggleHidden(e.id)}
+                        disabled={locked}
                         title={isHidden ? "Show" : "Hide"}
                         aria-label={isHidden ? `Show ${e.classCode}` : `Hide ${e.classCode}`}
                         className={clsx(
@@ -782,6 +1045,20 @@ export function Sidebar({
                 </div>
               </div>
             </div>,
+            document.body
+          )
+        : null}
+
+      {eventModal
+        ? createPortal(
+            <EventModal
+              key={eventModal.mode === "edit" ? eventModal.event.id : "add"}
+              state={eventModal}
+              onClose={onCloseEventModal}
+              onAdd={onAddEvent}
+              onUpdate={onUpdateEvent}
+              onDelete={onDeleteEvent}
+            />,
             document.body
           )
         : null}

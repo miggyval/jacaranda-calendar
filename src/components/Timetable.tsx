@@ -16,7 +16,7 @@ import {
   weekRangeLabel,
 } from "../lib/weeks";
 import { semesterDates, type SemesterSel } from "../lib/semester";
-import type { ClassEvent, PlanMode, PositionedEvent } from "../lib/types";
+import type { ClassEvent, Day, PlanMode, PositionedEvent } from "../lib/types";
 import JSZip from "jszip";
 
 const ICS_TZID = "Australia/Brisbane";
@@ -233,6 +233,9 @@ type Props = {
 
   previewGroupKey: string | null;
   onPreviewGroupKeyChange: (key: string | null) => void;
+
+  locked: boolean;
+  onEditEvent: (e: ClassEvent) => void;
 };
 
 const PX_PER_MIN = 1.2; // 72px per hour
@@ -253,6 +256,8 @@ export function Timetable({
   onToggleClashIgnore,
   previewGroupKey,
   onPreviewGroupKeyChange,
+  locked,
+  onEditEvent,
 }: Props) {
   const visibleSelected = useMemo(() => {
     if (hidden.size === 0) return selected;
@@ -423,13 +428,35 @@ export function Timetable({
   const days = daysInData(events);
   const byDay = layoutEventsByDay(layoutEvents);
 
-  const start = 8 * 60;
-  const end = 20 * 60;
+  // Auto-fit the visible window to the selected classes/events (+ padding to the hour),
+  // clamped to a sane range with a minimum span; falls back to 08:00–20:00 when empty.
+  const { start, end } = useMemo(() => {
+    if (selectedEvents.length === 0) return { start: 8 * 60, end: 20 * 60 };
+    let min = Infinity;
+    let max = -Infinity;
+    for (const e of selectedEvents) {
+      if (e.startMin < min) min = e.startMin;
+      if (e.endMin > max) max = e.endMin;
+    }
+    const s = Math.max(6 * 60, Math.floor(min / 60) * 60);
+    let en = Math.min(22 * 60, Math.ceil(max / 60) * 60);
+    if (en - s < 8 * 60) en = Math.min(22 * 60, s + 8 * 60);
+    return { start: s, end: en };
+  }, [selectedEvents]);
 
   const heightPx = Math.max(1, (end - start) * PX_PER_MIN + GRID_PAD_TOP + GRID_PAD_BOTTOM);
 
   const hours: number[] = [];
   for (let t = start; t <= end; t += 60) hours.push(t);
+
+  // "Now" line + today highlight (shown when the current week — or "all weeks" — is in view).
+  const nowDate = new Date();
+  const nowMin = nowDate.getHours() * 60 + nowDate.getMinutes();
+  const DAY_NAMES: Day[] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+  const todayDay = DAY_NAMES[nowDate.getDay()];
+  const currentWeekISO = weeks.find((w) => isCurrentWeek(w.weekStartISO))?.weekStartISO ?? null;
+  const showToday = activeWeek === null || activeWeek === currentWeekISO;
+  const nowLineMin = showToday && nowMin >= start && nowMin <= end ? nowMin : null;
 
   // Title/caption/legend shown in the exported image (only while `exporting`).
   const activeWeekOpt = activeWeek ? weeks.find((w) => w.weekStartISO === activeWeek) : null;
@@ -537,7 +564,11 @@ export function Timetable({
           >
             <div className="px-4 py-2 text-[11px] font-semibold text-white/45">Time</div>
             {days.map((d) => (
-              <div key={d} className="px-4 py-2 text-center text-[11px] font-semibold text-white/65">
+              <div
+                key={d}
+                className="px-4 py-2 text-center text-[11px] font-semibold"
+                style={{ color: showToday && d === todayDay ? "#7dd3fc" : "rgba(255,255,255,0.65)" }}
+              >
                 {d}
               </div>
             ))}
@@ -568,7 +599,10 @@ export function Timetable({
                 key={d}
                 events={byDay[d] ?? []}
                 start={start}
+                end={end}
                 heightPx={heightPx}
+                isToday={showToday && d === todayDay}
+                nowLineMin={nowLineMin}
                 onDeselect={onDeselect}
                 hoveredId={hoveredId}
                 previewId={previewId}
@@ -580,6 +614,8 @@ export function Timetable({
                 clashIgnoredIds={clashIgnoredVisible}
                 onToggleClashIgnore={onToggleClashIgnore}
                 mode={mode}
+                locked={locked}
+                onEditEvent={onEditEvent}
               />
             ))}
           </div>
@@ -607,6 +643,19 @@ export function Timetable({
                 style={{ padding: "5px 14px" }}
               >
                 All
+              </button>
+              <button
+                type="button"
+                onClick={() => currentWeekISO && setSelectedWeek(currentWeekISO)}
+                disabled={!currentWeekISO}
+                className={clsx(
+                  "shrink-0 rounded-full text-[12px] font-medium disabled:opacity-30",
+                  activeWeek && activeWeek === currentWeekISO ? "ctl-on" : "ctl-seg"
+                )}
+                style={{ padding: "5px 14px" }}
+                title="Jump to the current teaching week"
+              >
+                Today
               </button>
               {weeks.map((w) => {
                 const isActive = activeWeek === w.weekStartISO;
@@ -658,6 +707,11 @@ function DayColumn({
   clashIgnoredIds,
   onToggleClashIgnore,
   mode,
+  end,
+  isToday,
+  nowLineMin,
+  locked,
+  onEditEvent,
 }: {
   events: PositionedEvent[];
   start: number;
@@ -675,9 +729,12 @@ function DayColumn({
   clashIgnoredIds: Set<string>;
   onToggleClashIgnore: (id: string) => void;
   mode: PlanMode;
+  end: number;
+  isToday: boolean;
+  nowLineMin: number | null;
+  locked: boolean;
+  onEditEvent: (e: ClassEvent) => void;
 }) {
-  const end = 20 * 60;
-
   const bandHeight = 30 * PX_PER_MIN; // half hour
   const totalMinutes = end - start;
   const bandCount = Math.ceil(totalMinutes / 30);
@@ -685,7 +742,10 @@ function DayColumn({
   const INSET_X = 2; // how much the stripes are inset horizontally
 
   return (
-    <div className="relative border-r border-white/10" style={{ height: heightPx }}>
+    <div
+      className="relative border-r border-white/10"
+      style={{ height: heightPx, background: isToday ? "rgba(125,211,252,0.05)" : undefined }}
+    >
       {/* ---- STRIPY HALF-HOUR BACKGROUND ---- */}
       <div
         style={{
@@ -726,6 +786,33 @@ function DayColumn({
         })}
       </div>
 
+      {/* ---- NOW LINE (today only) ---- */}
+      {isToday && nowLineMin != null ? (
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            top: GRID_PAD_TOP + (nowLineMin - start) * PX_PER_MIN,
+            borderTop: "2px solid rgba(248,113,113,0.9)",
+            zIndex: 5,
+            pointerEvents: "none",
+          }}
+        >
+          <div
+            style={{
+              position: "absolute",
+              left: 0,
+              top: -4,
+              width: 7,
+              height: 7,
+              borderRadius: "50%",
+              background: "rgba(248,113,113,0.95)",
+            }}
+          />
+        </div>
+      ) : null}
+
       {/* ---- EVENTS ON TOP ---- */}
       {events.map((e) => (
         <EventCard
@@ -743,6 +830,8 @@ function DayColumn({
           isClashIgnored={clashIgnoredIds.has(e.id)}
           onToggleClashIgnore={onToggleClashIgnore}
           mode={mode}
+          locked={locked}
+          onEditEvent={onEditEvent}
         />
       ))}
     </div>
@@ -824,6 +913,8 @@ function EventCard({
   isClashIgnored,
   onToggleClashIgnore,
   mode,
+  locked,
+  onEditEvent,
 }: {
   e: PositionedEvent;
   start: number;
@@ -840,6 +931,8 @@ function EventCard({
   isClashIgnored: boolean;
   onToggleClashIgnore: (id: string) => void;
   mode: PlanMode;
+  locked: boolean;
+  onEditEvent: (e: ClassEvent) => void;
 }) {
   const V_GAP = 8;
 
@@ -896,7 +989,7 @@ function EventCard({
   }, [height, isTiny, e.courseCode, e.classCode, e.location, e.building, isClashing, isClashIgnored]);
 
   // Student-mode drag-to-swap: drag a selected card onto an equivalent ghost slot to switch streams.
-  const canDrag = mode === "student" && isEnabled;
+  const canDrag = mode === "student" && isEnabled && !locked && !e.custom;
   const dragRef = useRef<{ startX: number; startY: number; dragging: boolean; pointerId: number } | null>(null);
   const didDragRef = useRef(false);
   const highlightRef = useRef<HTMLElement | null>(null);
@@ -995,6 +1088,10 @@ function EventCard({
           didDragRef.current = false;
           return;
         }
+        if (e.custom) {
+          if (!locked) onEditEvent(e);
+          return;
+        }
         onPreviewGroupKeyChange(isGroupActive ? null : groupKey);
       }}
       className={clsx(
@@ -1034,7 +1131,7 @@ function EventCard({
       <button
         className={clsx(
           "absolute z-10",
-          "opacity-0 group-hover:opacity-100 transition-opacity",
+          locked ? "hidden" : "opacity-0 group-hover:opacity-100 transition-opacity",
           "rounded-[10px] border border-white/15 bg-white/10 backdrop-blur-xl",
           "shadow-[0_8px_18px_rgba(0,0,0,0.25)]",
           "hover:bg-white/15 active:bg-white/20",
@@ -1057,7 +1154,7 @@ function EventCard({
         )}
       </button>
 
-      {isClashing || isClashIgnored ? (
+      {(isClashing || isClashIgnored) && !locked ? (
         <button
           className="absolute z-10 rounded-[8px] border border-white/15 bg-white/10 p-[2px] shadow-[0_8px_18px_rgba(0,0,0,0.25)] backdrop-blur-xl hover:bg-white/15 active:bg-white/20"
           style={{ top: 2, left: 2 }}

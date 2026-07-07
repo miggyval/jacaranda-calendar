@@ -6,7 +6,7 @@ import { fetchCourseEvents } from "./lib/uqApi";
 import { defaultSemester, loadSemester, saveSemester, type SemesterSel } from "./lib/semester";
 import { groupKeyOf } from "./lib/weeks";
 import { downloadTextFile } from "./lib/download";
-import type { ClassEvent, PlanMode } from "./lib/types";
+import type { ClassEvent, EventDraft, PlanMode } from "./lib/types";
 
 const LS_KEY = "uq_timetable_state_v2";
 
@@ -58,6 +58,15 @@ const IGNORE_CLASHES_LS_KEY = "uq_ignore_clashes_v1";
 function loadIgnoreClashes(): boolean {
   try {
     return localStorage.getItem(IGNORE_CLASHES_LS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+const LOCKED_LS_KEY = "uq_locked_v1";
+function loadLocked(): boolean {
+  try {
+    return localStorage.getItem(LOCKED_LS_KEY) === "1";
   } catch {
     return false;
   }
@@ -135,6 +144,12 @@ export default function App() {
   // Clash warnings: global off-switch + a per-class set of "ignore clashes" ids.
   const [ignoreClashes, setIgnoreClashes] = useState<boolean>(() => loadIgnoreClashes());
   const [clashIgnored, setClashIgnored] = useState<Set<string>>(() => new Set());
+
+  // Lock mode: freeze the timetable so it can't be edited by accident.
+  const [locked, setLocked] = useState<boolean>(() => loadLocked());
+
+  // Add/edit-custom-event modal (owned here so the timetable can open it on card click).
+  const [eventModal, setEventModal] = useState<{ mode: "add" } | { mode: "edit"; event: ClassEvent } | null>(null);
 
   // Named saved plans (snapshots of the working timetable).
   const [plans, setPlans] = useState<SavedPlan[]>(() => loadPlans());
@@ -228,6 +243,14 @@ export default function App() {
 
   useEffect(() => {
     try {
+      localStorage.setItem(LOCKED_LS_KEY, locked ? "1" : "0");
+    } catch {
+      // ignore
+    }
+  }, [locked]);
+
+  useEffect(() => {
+    try {
       localStorage.setItem(PLANS_LS_KEY, JSON.stringify(plans));
     } catch {
       // ignore
@@ -268,6 +291,7 @@ export default function App() {
   }
 
   function loadPlan(id: string) {
+    if (locked) return;
     const p = plans.find((x) => x.id === id);
     if (!p) return;
     applyPlan(p);
@@ -301,6 +325,7 @@ export default function App() {
   }
 
   async function importPlan(file: File) {
+    if (locked) return;
     setError(null);
     try {
       const env = JSON.parse(await file.text());
@@ -358,7 +383,7 @@ export default function App() {
   }
 
   function undo() {
-    if (past.length === 0) return;
+    if (locked || past.length === 0) return;
     const cur = snapshot();
     const prev = past[past.length - 1];
     setPast((p) => p.slice(0, -1));
@@ -367,7 +392,7 @@ export default function App() {
   }
 
   function redo() {
-    if (future.length === 0) return;
+    if (locked || future.length === 0) return;
     const cur = snapshot();
     const next = future[0];
     setFuture((f) => f.slice(1));
@@ -400,6 +425,7 @@ export default function App() {
   const allIds = useMemo(() => events.map((e) => e.id), [events]);
 
   function toggleSelected(id: string) {
+    if (locked) return;
     commit();
     setSelected((prev) => {
       const next = new Set(prev);
@@ -423,6 +449,7 @@ export default function App() {
   }
 
   function toggleHidden(id: string) {
+    if (locked) return;
     commit();
     setHidden((prev) => {
       const next = new Set(prev);
@@ -433,6 +460,7 @@ export default function App() {
   }
 
   function toggleClashIgnore(id: string) {
+    if (locked) return;
     commit();
     setClashIgnored((prev) => {
       const next = new Set(prev);
@@ -443,23 +471,27 @@ export default function App() {
   }
 
   function selectAll() {
+    if (locked) return;
     commit();
     setSelected(new Set(allIds));
   }
 
   function clearAll() {
+    if (locked) return;
     commit();
     setSelected(new Set());
     setPreviewGroupKey(null);
   }
 
   function showAll() {
+    if (locked) return;
     commit();
     setHidden(new Set());
   }
 
   // Remove every class for a course from the working timetable.
   function removeCourse(courseCode: string) {
+    if (locked) return;
     const removedIds = new Set(
       events.filter((e) => e.courseCode === courseCode).map((e) => e.id)
     );
@@ -485,7 +517,64 @@ export default function App() {
     setHoveredId(null);
   }
 
+  // ----- Custom events (meetings / consultation hours / activities) -----
+  function openAddEvent() {
+    if (locked) return;
+    setEventModal({ mode: "add" });
+  }
+  function openEditEvent(event: ClassEvent) {
+    setEventModal({ mode: "edit", event });
+  }
+
+  function eventFromDraft(id: string, d: EventDraft): ClassEvent {
+    return {
+      id,
+      courseCode: d.title,
+      classCode: d.category || "Event",
+      day: d.day,
+      startMin: d.startMin,
+      endMin: d.endMin,
+      location: d.location,
+      custom: true,
+      ...(d.date ? { activeDates: [d.date] } : {}),
+    };
+  }
+
+  function addCustomEvent(d: EventDraft) {
+    if (locked) return;
+    commit();
+    const id = `custom:${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    setEvents((prev) => [...prev, eventFromDraft(id, d)]);
+    setSelected((prev) => new Set(prev).add(id));
+    setEventModal(null);
+  }
+
+  function updateCustomEvent(id: string, d: EventDraft) {
+    if (locked) return;
+    commit();
+    setEvents((prev) => prev.map((e) => (e.id === id ? eventFromDraft(id, d) : e)));
+    setEventModal(null);
+  }
+
+  function deleteCustomEvent(id: string) {
+    if (locked) return;
+    commit();
+    setEvents((prev) => prev.filter((e) => e.id !== id));
+    setSelected((prev) => {
+      const n = new Set(prev);
+      n.delete(id);
+      return n;
+    });
+    setHidden((prev) => {
+      const n = new Set(prev);
+      n.delete(id);
+      return n;
+    });
+    setEventModal(null);
+  }
+
   async function importCsv(file: File) {
+    if (locked) return;
     commit();
     setLoading(true);
     setError(null);
@@ -513,6 +602,7 @@ export default function App() {
 
   // Fetch one or more course codes from UQ and merge them into the current timetable.
   async function addCourses(input: string) {
+    if (locked) return;
     const tokens = input.split(/[\s,]+/).map((t) => t.trim()).filter(Boolean);
     if (tokens.length === 0) return;
 
@@ -569,9 +659,13 @@ export default function App() {
         onImport={importCsv}
         onAddCourses={addCourses}
         semester={semester}
-        onSemesterChange={setSemester}
+        onSemesterChange={(s) => {
+          if (!locked) setSemester(s);
+        }}
         mode={mode}
-        onModeChange={setMode}
+        onModeChange={(m) => {
+          if (!locked) setMode(m);
+        }}
         ignoreClashes={ignoreClashes}
         onIgnoreClashesChange={setIgnoreClashes}
         plans={plans}
@@ -581,6 +675,14 @@ export default function App() {
         onDeletePlan={deletePlan}
         onExportPlan={exportPlan}
         onImportPlan={importPlan}
+        locked={locked}
+        onToggleLocked={() => setLocked((v) => !v)}
+        onOpenAddEvent={openAddEvent}
+        eventModal={eventModal}
+        onCloseEventModal={() => setEventModal(null)}
+        onAddEvent={addCustomEvent}
+        onUpdateEvent={updateCustomEvent}
+        onDeleteEvent={deleteCustomEvent}
         loading={loading}
         error={error}
       />
@@ -599,6 +701,8 @@ export default function App() {
         onToggleClashIgnore={toggleClashIgnore}
         previewGroupKey={previewGroupKey}
         onPreviewGroupKeyChange={setPreviewGroupKey}
+        locked={locked}
+        onEditEvent={openEditEvent}
       />
     </div>
   );
