@@ -86,7 +86,7 @@ jobs:
 
             **Windows** — download `..._x64-setup.exe` (or the `.msi`). If SmartScreen appears: **More info → Run anyway**.
 
-            **macOS** — Apple Silicon (M1/M2/M3…): the `aarch64` `.dmg`. Intel: the `x64` `.dmg`. Drag to Applications, then on first launch **right-click the app → Open → Open** (or run `xattr -cr "/Applications/UQ Timetable Planner.app"`).
+            **macOS** — Apple Silicon (M1/M2/M3…): the `aarch64` `.dmg`. Intel: the `x64` `.dmg`. Drag to Applications, double-click it once (macOS will say it can't verify the app — click **Done**), then open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**. Alternative: run `xattr -cr "/Applications/UQ Timetable Planner.app"` in Terminal and open it normally.
 
             **Linux** — pick your arch (`amd64` for Intel/AMD, `aarch64` for ARM): `.AppImage` (`chmod +x` then run), `.deb` (Debian/Ubuntu), or `.rpm` (Fedora/openSUSE).
 
