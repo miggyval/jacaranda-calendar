@@ -1,6 +1,6 @@
 name: app
 options:
-  bundleIdPrefix: com.miguelvalencia.uqtimetable
+  bundleIdPrefix: com.miguelvalencia.jacaranda
   deploymentTarget:
     iOS: 14.0
 fileGroups: [../../src]
@@ -10,8 +10,8 @@ configs:
 settingGroups:
   app:
     base:
-      PRODUCT_NAME: UQ Timetable Planner
-      PRODUCT_BUNDLE_IDENTIFIER: com.miguelvalencia.uqtimetable
+      PRODUCT_NAME: Jacaranda Calendar
+      PRODUCT_BUNDLE_IDENTIFIER: com.miguelvalencia.jacaranda
 targetTemplates:
   app:
     type: application

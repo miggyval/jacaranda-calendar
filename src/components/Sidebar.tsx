@@ -525,7 +525,7 @@ export function Sidebar({
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="truncate text-[13px] font-semibold text-white/85">
-              UQ Timetable Planner
+              Jacaranda Calendar
             </div>
             <div className="mt-1 text-[11px] text-white/50">
               {events.length} classes · {selected.size} selected · {allocatedHours} hrs

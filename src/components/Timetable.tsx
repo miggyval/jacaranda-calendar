@@ -127,12 +127,12 @@ function buildIcsForEvents(
   opts?: { calName?: string; color?: string; mode?: PlanMode }
 ) {
   const dtstamp = icsLocalDateTime(new Date());
-  const calName = opts?.calName ?? `UQ Timetable — ${semester.code} ${semester.year}`;
+  const calName = opts?.calName ?? `Jacaranda Calendar — ${semester.code} ${semester.year}`;
 
   const lines: string[] = [];
   lines.push("BEGIN:VCALENDAR");
   lines.push("VERSION:2.0");
-  lines.push("PRODID:-//UQ Timetable Planner//EN");
+  lines.push("PRODID:-//Jacaranda Calendar//EN");
   lines.push("CALSCALE:GREGORIAN");
   lines.push("METHOD:PUBLISH");
   lines.push(`X-WR-CALNAME:${escapeIcsText(calName)}`);
@@ -541,7 +541,7 @@ export function Timetable({
           {exporting && (
             <div style={{ padding: "18px 22px 6px" }}>
               <div style={{ fontSize: 18, fontWeight: 800, color: "#ffffff", letterSpacing: "-0.01em" }}>
-                UQ Timetable — {semLabel}
+                Jacaranda Calendar — {semLabel}
               </div>
               <div style={{ marginTop: 2, fontSize: 12, color: "rgba(255,255,255,0.55)" }}>{pngCaption}</div>
               {legendCourses.length > 0 && (

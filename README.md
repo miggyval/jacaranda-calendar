@@ -1,73 +1,44 @@
-# React + TypeScript + Vite
+# Jacaranda Calendar
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A fast desktop timetable planner for University of Queensland students and staff. Add courses by
+code, arrange your classes visually, avoid clashes, and export the result to your real calendar.
 
-Currently, two official plugins are available:
+> **Not affiliated with, endorsed by, or an official product of The University of Queensland.**
+> Jacaranda Calendar reads UQ's **public** class timetable (the same data as the public Allocate+
+> site) and is an independent, unofficial tool. "UQ" and related marks belong to the University.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Features
 
-## React Compiler
+- **Add courses by code** — pulls the live timetable straight from UQ (no CSV hand-building).
+- **Student & Staff modes** — one stream per activity group, or free multi-select for teaching staff.
+- **Clash detection** — warns on overlaps; ignore per-class or globally.
+- **Week-aware** — filter to a single teaching week; jump to today with a live "now" line.
+- **Custom events** — add your own meetings, consultations, or activities (weekly or one-off).
+- **Drag to swap** streams, **undo/redo**, **lock mode**, colour-coded courses, collapsible groups.
+- **Export** — week-accurate iCal (per course or combined), CSV, and a PNG of your timetable; save,
+  export, and share plans as portable `.uqplan` files.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Install
 
-## Expanding the ESLint configuration
+Grab the latest build from the [Releases page](../../releases/latest):
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+- **Windows** — `..._x64-setup.exe` (or the `.msi`). If SmartScreen appears: **More info → Run anyway**.
+- **macOS** — Apple Silicon: the `aarch64` `.dmg`; Intel: the `x64` `.dmg`. Drag to Applications; on
+  first launch macOS says it can't verify the app — click **Done**, then **System Settings → Privacy &
+  Security → Open Anyway**. (The apps are ad-hoc signed but not notarized.)
+- **Linux** — `.AppImage` (`chmod +x` then run), `.deb`, or `.rpm`; `amd64` or `aarch64`.
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## Development
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+Built with Tauri 2 (Rust) + React 19 + TypeScript + Vite.
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
+npm run dev          # web dev server
+npm run tauri dev    # full desktop app
+npm run tauri build  # build installers for the current platform
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## License
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+[GPL-3.0-only](LICENSE) © Miguel Marco Valencia

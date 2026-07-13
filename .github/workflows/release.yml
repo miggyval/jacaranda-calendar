@@ -78,7 +78,7 @@ jobs:
           args: ${{ matrix.args }}
           # Only create a GitHub Release when triggered by a version tag.
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
-          releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('UQ Timetable Planner {0}', github.ref_name) || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('Jacaranda Calendar {0}', github.ref_name) || '' }}
           releaseDraft: false
           prerelease: true # alpha builds
           releaseBody: |
@@ -86,7 +86,7 @@ jobs:
 
             **Windows** — download `..._x64-setup.exe` (or the `.msi`). If SmartScreen appears: **More info → Run anyway**.
 
-            **macOS** — Apple Silicon (M1/M2/M3…): the `aarch64` `.dmg`. Intel: the `x64` `.dmg`. Drag to Applications, double-click it once (macOS will say it can't verify the app — click **Done**), then open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**. Alternative: run `xattr -cr "/Applications/UQ Timetable Planner.app"` in Terminal and open it normally.
+            **macOS** — Apple Silicon (M1/M2/M3…): the `aarch64` `.dmg`. Intel: the `x64` `.dmg`. Drag to Applications, double-click it once (macOS will say it can't verify the app — click **Done**), then open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**. Alternative: run `xattr -cr "/Applications/Jacaranda Calendar.app"` in Terminal and open it normally.
 
             **Linux** — pick your arch (`amd64` for Intel/AMD, `aarch64` for ARM): `.AppImage` (`chmod +x` then run), `.deb` (Debian/Ubuntu), or `.rpm` (Fedora/openSUSE).
 
@@ -95,3 +95,17 @@ jobs:
           name: ${{ matrix.artifact }}
           if-no-files-found: error
           path: ${{ matrix.paths }}
+
+  # The macOS jobs upload .app.tar.gz updater archives we don't use — drop them from the release.
+  tidy-release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for asset in $(gh release view "${{ github.ref_name }}" -R "${{ github.repository }}" --json assets --jq '.assets[].name' | grep 'app\.tar\.gz$' || true); do
+            gh release delete-asset "${{ github.ref_name }}" "$asset" -R "${{ github.repository }}" -y
+            echo "deleted $asset"
+          done

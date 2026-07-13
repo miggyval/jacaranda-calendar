@@ -307,7 +307,7 @@ export default function App() {
   function exportPlan() {
     if (events.length === 0) return;
     const current = plans.find((p) => p.id === currentPlanId);
-    const name = current?.name ?? "UQ timetable";
+    const name = current?.name ?? "Jacaranda timetable";
     const plan: SavedPlan = {
       id: currentPlanId ?? newPlanId(),
       name,
@@ -330,7 +330,7 @@ export default function App() {
     try {
       const env = JSON.parse(await file.text());
       if (!env || env.app !== PLAN_FILE_APP || env.kind !== "plan" || !env.plan) {
-        throw new Error("Not a UQ Timetable plan file");
+        throw new Error("Not a recognised plan file");
       }
       const p = env.plan as SavedPlan;
       if (!isValidEvents(p.events) || !Array.isArray(p.selectedIds)) {
