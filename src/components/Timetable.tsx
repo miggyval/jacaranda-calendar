@@ -428,21 +428,9 @@ export function Timetable({
   const days = daysInData(events);
   const byDay = layoutEventsByDay(layoutEvents);
 
-  // Auto-fit the visible window to the selected classes/events (+ padding to the hour),
-  // clamped to a sane range with a minimum span; falls back to 08:00–20:00 when empty.
-  const { start, end } = useMemo(() => {
-    if (selectedEvents.length === 0) return { start: 8 * 60, end: 20 * 60 };
-    let min = Infinity;
-    let max = -Infinity;
-    for (const e of selectedEvents) {
-      if (e.startMin < min) min = e.startMin;
-      if (e.endMin > max) max = e.endMin;
-    }
-    const s = Math.max(6 * 60, Math.floor(min / 60) * 60);
-    let en = Math.min(22 * 60, Math.ceil(max / 60) * 60);
-    if (en - s < 8 * 60) en = Math.min(22 * 60, s + 8 * 60);
-    return { start: s, end: en };
-  }, [selectedEvents]);
+  // Fixed visible window (08:00–20:00) — the grid does not auto-resize to the selection.
+  const start = 8 * 60;
+  const end = 20 * 60;
 
   const heightPx = Math.max(1, (end - start) * PX_PER_MIN + GRID_PAD_TOP + GRID_PAD_BOTTOM);
 
