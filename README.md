@@ -1,4 +1,14 @@
-# Jacaranda Calendar
+<div align="center">
+
+![Jacaranda Calendar — university timetable planner](docs/banner.png)
+
+[![Latest release](https://img.shields.io/github/v/release/miggyval/jacaranda-calendar?include_prereleases&sort=semver&label=release&color=7c3aed)](https://github.com/miggyval/jacaranda-calendar/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/miggyval/jacaranda-calendar/total?color=7c3aed)](https://github.com/miggyval/jacaranda-calendar/releases)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-7c3aed)](LICENSE)
+![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-6b46c1)
+[![Built with Tauri + React](https://img.shields.io/badge/built%20with-Tauri%20%2B%20React-6b46c1)](https://tauri.app)
+
+</div>
 
 A fast desktop timetable planner for University of Queensland students and staff. Add courses by
 code, arrange your classes visually, avoid clashes, and export the result to your real calendar.
