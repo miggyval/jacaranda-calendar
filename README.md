@@ -7,6 +7,10 @@ code, arrange your classes visually, avoid clashes, and export the result to you
 > Jacaranda Calendar reads UQ's **public** class timetable (the same data as the public Allocate+
 > site) and is an independent, unofficial tool. "UQ" and related marks belong to the University.
 
+![Jacaranda Calendar showing an example UQ first-year engineering timetable — ENGG1100, ENGG1300, MATH1051, and CHEM1100 laid out clash-free across the week](docs/screenshot.png)
+
+*Example: a Semester 1 first-year engineering load (ENGG1100, MATH1051, ENGG1300, CHEM1100).*
+
 ## Features
 
 - **Add courses by code** — pulls the live timetable straight from UQ (no CSV hand-building).
