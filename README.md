@@ -39,6 +39,14 @@ npm run tauri dev    # full desktop app
 npm run tauri build  # build installers for the current platform
 ```
 
+## AI-assisted development
+
+This project was built with substantial help from generative AI — Anthropic's Claude, via Claude
+Code. AI was used throughout: writing and refactoring features, debugging, setting up the CI/release
+pipeline, and documentation. All work was directed, reviewed, and tested by the author, who takes
+responsibility for the result. Individual commits are annotated with `Co-Authored-By` trailers where
+AI contributed.
+
 ## License
 
 [GPL-3.0-only](LICENSE) © Miguel Marco Valencia
