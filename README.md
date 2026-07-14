@@ -2,6 +2,12 @@
 
 ![Jacaranda Calendar — university timetable planner](docs/banner.png)
 
+### Download
+
+[![Windows](https://img.shields.io/badge/Windows-.exe%20%2F%20.msi-0078D6?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/miggyval/jacaranda-calendar/releases/latest)
+[![macOS](https://img.shields.io/badge/macOS-.dmg-000000?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/miggyval/jacaranda-calendar/releases/latest)
+[![Linux](https://img.shields.io/badge/Linux-.deb%20%2F%20.AppImage%20%2F%20.rpm-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/miggyval/jacaranda-calendar/releases/latest)
+
 [![Latest release](https://img.shields.io/github/v/release/miggyval/jacaranda-calendar?include_prereleases&sort=semver&label=release&color=7c3aed)](https://github.com/miggyval/jacaranda-calendar/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/miggyval/jacaranda-calendar/total?color=7c3aed)](https://github.com/miggyval/jacaranda-calendar/releases)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-7c3aed)](LICENSE)
@@ -17,9 +23,9 @@ code, arrange your classes visually, avoid clashes, and export the result to you
 > Jacaranda Calendar reads UQ's **public** class timetable (the same data as the public Allocate+
 > site) and is an independent, unofficial tool. "UQ" and related marks belong to the University.
 
-![Jacaranda Calendar showing an example UQ first-year engineering timetable — ENGG1100, ENGG1300, MATH1051, and CHEM1100 laid out clash-free across the week](docs/screenshot.png)
+![Jacaranda Calendar showing an example UQ first-year electrical-engineering timetable — ENGG1100, MATH1051, ENGG1300, and CSSE1001 laid out clash-free across the week](docs/screenshot.png)
 
-*Example: a Semester 1 first-year engineering load (ENGG1100, MATH1051, ENGG1300, CHEM1100).*
+*Example: a Semester 1 first-year electrical-engineering load (ENGG1100, MATH1051, ENGG1300, CSSE1001).*
 
 ## Features
 
@@ -31,6 +37,21 @@ code, arrange your classes visually, avoid clashes, and export the result to you
 - **Drag to swap** streams, **undo/redo**, **lock mode**, colour-coded courses, collapsible groups.
 - **Export** — week-accurate iCal (per course or combined), CSV, and a PNG of your timetable; save,
   export, and share plans as portable `.uqplan` files.
+
+## Highlights
+
+<table>
+<tr>
+<td width="50%" valign="top">
+<img src="docs/drag-to-swap.gif" alt="Drag a class card onto an alternative slot to swap streams" />
+<br /><sub><b>Drag to swap</b> — drop a class onto an equivalent slot to switch streams.</sub>
+</td>
+<td width="50%" valign="top">
+<img src="docs/custom-events.gif" alt="Add your own custom events like meetings and consultations" />
+<br /><sub><b>Custom events</b> — add your own meetings, consultations, and activities.</sub>
+</td>
+</tr>
+</table>
 
 ## Install
 
