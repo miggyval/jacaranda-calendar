@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import { createPortal } from "react-dom";
 import {
   Check, Download, X, Trash2, EyeOff, FileDown, FileUp, Eye, Undo2, Redo2,
-  Lock, LockOpen, CalendarPlus, ChevronDown, ChevronRight,
+  Lock, LockOpen, CalendarPlus, ChevronDown, ChevronRight, RefreshCw,
 } from "lucide-react";
 import clsx from "clsx";
 import { courseToColor } from "../lib/colors";
@@ -52,6 +52,8 @@ type Props = {
   onAddEvent: (d: EventDraft) => void;
   onUpdateEvent: (id: string, d: EventDraft) => void;
   onDeleteEvent: (id: string) => void;
+  onRefresh: () => void;
+  refreshing: boolean;
   loading: boolean;
   error?: string | null;
   allocatedHours: number;
@@ -361,6 +363,8 @@ export function Sidebar({
   onAddEvent,
   onUpdateEvent,
   onDeleteEvent,
+  onRefresh,
+  refreshing,
   loading,
   error,
   allocatedHours,
@@ -567,6 +571,16 @@ export function Sidebar({
             aria-label="Redo"
           >
             <Redo2 className="h-4 w-4" />
+          </button>
+
+          <button
+            className="selection-ring shrink-0 rounded-lg border border-white/10 bg-white/5 p-2 text-white/80 hover:bg-white/10 disabled:opacity-30"
+            onClick={onRefresh}
+            disabled={refreshing}
+            title="Check UQ for timetable changes"
+            aria-label="Refresh from UQ"
+          >
+            <RefreshCw className={clsx("h-4 w-4", refreshing && "jc-spin")} />
           </button>
 
           <button

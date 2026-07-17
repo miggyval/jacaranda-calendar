@@ -34,6 +34,19 @@ export interface PositionedEvent extends ClassEvent {
   cols: number;  // number of parallel columns in this overlap group
 }
 
+// A single difference detected when re-syncing a course against UQ.
+export type ClassChange =
+  | { kind: "added"; courseCode: string; classCode: string; after: ClassEvent }
+  | { kind: "removed"; courseCode: string; classCode: string; before: ClassEvent }
+  | {
+      kind: "modified";
+      courseCode: string;
+      classCode: string;
+      before: ClassEvent;
+      after: ClassEvent;
+      fields: ("day" | "time" | "location")[];
+    };
+
 // Draft for a user-created custom event, produced by the add/edit form.
 export interface EventDraft {
   title: string;

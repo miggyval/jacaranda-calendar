@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { Timetable } from "./components/Timetable";
+import { ChangesModal } from "./components/ChangesModal";
 import { parseClassesCsv } from "./lib/parseCsv";
 import { fetchCourseEvents } from "./lib/uqApi";
 import { defaultSemester, loadSemester, saveSemester, type SemesterSel } from "./lib/semester";
 import { groupKeyOf } from "./lib/weeks";
+import { diffCourses } from "./lib/refresh";
 import { downloadTextFile } from "./lib/download";
-import type { ClassEvent, EventDraft, PlanMode } from "./lib/types";
+import type { ClassChange, ClassEvent, EventDraft, PlanMode } from "./lib/types";
 
 const LS_KEY = "uq_timetable_state_v2";
 
@@ -166,6 +168,16 @@ export default function App() {
   const [future, setFuture] = useState<Doc[]>([]);
   const undoRef = useRef<() => void>(() => {});
   const redoRef = useRef<() => void>(() => {});
+
+  // UQ refresh: re-sync loaded courses on open + on demand; `changes` non-null opens the summary modal.
+  const [refreshing, setRefreshing] = useState(false);
+  const [changes, setChanges] = useState<ClassChange[] | null>(null);
+  const eventsRef = useRef(events);
+  const semesterRef = useRef(semester);
+  const refreshingRef = useRef(false);
+  const refreshRef = useRef<(manual: boolean) => void>(() => {});
+  eventsRef.current = events;
+  semesterRef.current = semester;
 
   useEffect(() => {
     try {
@@ -627,6 +639,70 @@ export default function App() {
     setLoading(false);
   }
 
+  // Re-fetch every loaded (non-custom) course from UQ, diff against the current classes, apply the
+  // update (migrating selections/hidden/ignored by class identity), and surface a change summary.
+  // `manual` also reports "up to date" and network errors; the on-open check stays silent otherwise.
+  async function refreshFromUq(manual: boolean) {
+    if (refreshingRef.current) return;
+    const courses = [...new Set(eventsRef.current.filter((e) => !e.custom).map((e) => e.courseCode))];
+    if (courses.length === 0) {
+      if (manual) setChanges([]);
+      return;
+    }
+    refreshingRef.current = true;
+    setRefreshing(true);
+    if (manual) setError(null);
+
+    const sem = semesterRef.current;
+    const fetched: ClassEvent[] = [];
+    const ok = new Set<string>();
+    let anyError = false;
+    for (const c of courses) {
+      try {
+        fetched.push(...(await fetchCourseEvents(c, sem)));
+        ok.add(c);
+      } catch {
+        anyError = true;
+      }
+    }
+
+    refreshingRef.current = false;
+    setRefreshing(false);
+
+    if (ok.size === 0) {
+      if (manual) setError("Couldn't reach UQ to check for changes.");
+      return;
+    }
+
+    const { events: nextEvents, changes: ch, idRemap, removedIds } = diffCourses(eventsRef.current, fetched, ok);
+    const migrate = (s: Set<string>) => {
+      const n = new Set<string>();
+      for (const id of s) {
+        if (removedIds.has(id)) continue;
+        n.add(idRemap.get(id) ?? id);
+      }
+      return n;
+    };
+
+    if (ch.length > 0) {
+      commit();
+      setEvents(nextEvents);
+      setSelected(migrate);
+      setHidden(migrate);
+      setClashIgnored(migrate);
+    }
+    if (ch.length > 0 || manual) setChanges(ch);
+    if (manual && anyError) setError("Some courses couldn't be checked — showing what we could.");
+  }
+
+  refreshRef.current = refreshFromUq;
+
+  // Check UQ for timetable changes once, shortly after opening (silent unless something changed).
+  useEffect(() => {
+    const t = setTimeout(() => refreshRef.current(false), 700);
+    return () => clearTimeout(t);
+  }, []);
+
   const selectedEventsForCount = useMemo(
     () => events.filter((e) => selected.has(e.id)),
     [events, selected]
@@ -683,6 +759,8 @@ export default function App() {
         onAddEvent={addCustomEvent}
         onUpdateEvent={updateCustomEvent}
         onDeleteEvent={deleteCustomEvent}
+        onRefresh={() => refreshFromUq(true)}
+        refreshing={refreshing}
         loading={loading}
         error={error}
       />
@@ -704,6 +782,8 @@ export default function App() {
         locked={locked}
         onEditEvent={openEditEvent}
       />
+
+      {changes !== null ? <ChangesModal changes={changes} onClose={() => setChanges(null)} /> : null}
     </div>
   );
 }

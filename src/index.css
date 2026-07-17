@@ -45,3 +45,7 @@ body {
 .ctl-seg:hover { color: rgba(255, 255, 255, 0.82); background: rgba(255, 255, 255, 0.06); }
 .ctl-on { background: rgba(255, 255, 255, 0.22); color: #ffffff; border-color: rgba(255, 255, 255, 0.32); }
 .ctl-on:hover { background: rgba(255, 255, 255, 0.26); }
+
+/* Spinner for the refresh button while checking UQ */
+@keyframes jc-spin { to { transform: rotate(360deg); } }
+.jc-spin { animation: jc-spin 0.8s linear infinite; }
