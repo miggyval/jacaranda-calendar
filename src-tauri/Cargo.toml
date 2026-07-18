@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.1.5"
+version = "0.1.6"
 description = "Jacaranda Calendar — a university timetable planner"
 authors = ["Miguel Marco Valencia"]
 license = "GPL-3.0-only"
