@@ -89,6 +89,14 @@ function dayToOffset(d: string) {
   }
 }
 
+const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+// The calendar date of a weekday within the teaching week starting `weekStartISO`, e.g. "3 Mar".
+function dayDateLabel(weekStartISO: string, day: string): string {
+  const dt = ymdToDateLocal(weekStartISO);
+  dt.setDate(dt.getDate() + dayToOffset(day));
+  return `${dt.getDate()} ${MONTHS_SHORT[dt.getMonth()]}`;
+}
+
 function dateWithMinutes(base: Date, minutes: number) {
   const dt = new Date(base);
   dt.setHours(0, 0, 0, 0);
@@ -551,15 +559,26 @@ export function Timetable({
             style={{ gridTemplateColumns: `80px repeat(${days.length}, minmax(0, 1fr))` }}
           >
             <div className="px-4 py-2 text-[11px] font-semibold text-white/45">Time</div>
-            {days.map((d) => (
-              <div
-                key={d}
-                className="px-4 py-2 text-center text-[11px] font-semibold"
-                style={{ color: showToday && d === todayDay ? "#7dd3fc" : "rgba(255,255,255,0.65)" }}
-              >
-                {d}
-              </div>
-            ))}
+            {days.map((d) => {
+              const isToday = showToday && d === todayDay;
+              return (
+                <div
+                  key={d}
+                  className="px-4 py-2 text-center"
+                  style={{ color: isToday ? "#7dd3fc" : "rgba(255,255,255,0.65)" }}
+                >
+                  <div className="text-[11px] font-semibold">{d}</div>
+                  {activeWeek ? (
+                    <div
+                      className="text-[10px] tabular-nums"
+                      style={{ marginTop: 1, fontWeight: 500, color: isToday ? "#7dd3fc" : "rgba(255,255,255,0.4)" }}
+                    >
+                      {dayDateLabel(activeWeek, d)}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
 
           <div
